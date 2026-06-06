@@ -6,6 +6,7 @@
 - RLE 压缩: DEC VT Sixel 协议 !COUNT CHAR
 - 流式编码: 逐帧编码+释放，避免内存退化
 - 自适应延迟: 编码耗时从 sleep 中扣除
+- 有序抖动: Bayer 8x8 矩阵减少色带 (可选)
 """
 import sys
 import time
@@ -20,14 +21,36 @@ MAX_PX_WIDTH = MAX_WIDTH * 8
 _SIXEL_WEIGHTS = np.array([1, 2, 4, 8, 16, 32], dtype=np.uint8).reshape(6, 1)
 
 _COLOR_STR = [f"#{i}".encode("ascii") for i in range(256)]
-_RUN_STR = [str(i).encode("ascii") for i in range(513)]
+_RUN_STR = [str(i).encode("ascii") for i in range(MAX_PX_WIDTH + 1)]
 
 DEFAULT_COLORS = 32
 
+_BAYER8 = np.array([
+    [ 0, 32,  8, 40,  2, 34, 10, 42],
+    [48, 16, 56, 24, 50, 18, 58, 26],
+    [12, 44,  4, 36, 14, 46,  6, 38],
+    [60, 28, 52, 20, 62, 30, 54, 22],
+    [ 3, 35, 11, 43,  1, 33,  9, 41],
+    [51, 19, 59, 27, 49, 17, 57, 25],
+    [15, 47,  7, 39, 13, 45,  5, 37],
+    [63, 31, 55, 23, 61, 29, 53, 21],
+], dtype=np.float32) / 64.0 - 0.5
 
-def quantize(img, max_colors=DEFAULT_COLORS):
-    """将图片量化为有限调色板。"""
-    return img.convert("RGB").quantize(max_colors, method=Image.Quantize.MEDIANCUT)
+
+def quantize(img, max_colors=DEFAULT_COLORS, dither=False):
+    """将图片量化为有限调色板。可选 Bayer 有序抖动。"""
+    rgb = img.convert("RGB")
+    if dither:
+        arr = np.array(rgb, dtype=np.float32)
+        h, w = arr.shape[:2]
+        tile_y = (h + 7) // 8
+        tile_x = (w + 7) // 8
+        bayer = np.tile(_BAYER8, (tile_y, tile_x))[:h, :w]
+        amplitude = 255.0 / max_colors
+        arr += bayer[:, :, np.newaxis] * amplitude
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+        rgb = Image.fromarray(arr)
+    return rgb.quantize(max_colors, method=Image.Quantize.MEDIANCUT)
 
 
 def _resize_for_terminal(img):
@@ -40,10 +63,10 @@ def _resize_for_terminal(img):
     return img.resize((w, h), Image.Resampling.LANCZOS)
 
 
-def _preprocess_frame(img):
+def _preprocess_frame(img, dither=False):
     """预处理一帧：resize → quantize → numpy array + palette。"""
     img = _resize_for_terminal(img)
-    img = quantize(img)
+    img = quantize(img, dither=dither)
     palette = img.getpalette()
     w, h = img.size
     num_colors = len(palette) // 3
@@ -78,8 +101,7 @@ def _rle_encode(vals):
             extend(_RUN_STR[run])
             append(v)
         else:
-            for k in range(run):
-                append(int(vals[start + k]))
+            extend(vals[start:start + run].tobytes())
     return bytes(out)
 
 
@@ -126,7 +148,7 @@ def encode_sixel(pixels_np, palette_colors, w, h):
     return bytes(parts), sixel_bands
 
 
-def get_gif_frames(path):
+def get_gif_frames(path, dither=False):
     """提取 GIF 所有帧，返回 (帧列表, 延迟列表) 或 (None, None)。"""
     img = Image.open(path)
     if not getattr(img, "is_animated", False) or img.n_frames <= 1:
@@ -150,7 +172,7 @@ def get_gif_frames(path):
         frame = img.convert("RGBA")
         canvas.paste(frame, (0, 0), frame if frame.mode == "RGBA" else None)
 
-        pixels_np, palette_colors, w, h = _preprocess_frame(canvas.copy())
+        pixels_np, palette_colors, w, h = _preprocess_frame(canvas.copy(), dither=dither)
         frame_arrays.append((pixels_np, palette_colors, w, h))
 
         if disposal == 2:
@@ -229,21 +251,20 @@ def show_static(path):
 
 def main():
     no_anim = "--no-anim" in sys.argv
+    dither = "--dither" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
 
     if not args:
-        theme_dir = Path.home() / "AppData" / "Roaming" / "Typora" / "themes" / "onelight"
-        img_dir = theme_dir / "img"
-        if img_dir.exists():
-            images = list(img_dir.glob("*"))
-            if images:
-                path = images[0]
-            else:
-                print("未找到图片")
-                sys.exit(1)
-        else:
-            print(f"用法: {sys.argv[0]} [--no-anim] <图片路径>")
-            sys.exit(1)
+        prog = Path(sys.argv[0]).name
+        print(f"Sixel 图片终端显示器\n")
+        print(f"用法: {prog} [选项] <图片路径>\n")
+        print(f"选项:")
+        print(f"  --no-anim    强制静态模式，GIF 只显示第一帧")
+        print(f"  --dither     启用 Bayer 有序抖动 (减少色带)\n")
+        print(f"支持格式: PNG, JPEG, GIF, BMP, WebP 等 (PIL 支持的所有格式)")
+        print(f"动画 GIF 会自动循环播放，按 Ctrl+C 停止")
+        print(f"终端需支持 Sixel 协议 (Windows Terminal, xterm, WezTerm 等)")
+        sys.exit(0)
     else:
         path = Path(args[0])
 
