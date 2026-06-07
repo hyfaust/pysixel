@@ -60,38 +60,70 @@ pip install -r requirements.txt
 
 ## 使用方法
 
-### 显示静态图片
+### 快速开始
 
 ```bash
+# 基本用法
 python pysixel.py photo.png
-```
-
-### 播放 GIF 动画
-
-```bash
-# 自动检测 GIF，循环播放，Ctrl+C 停止
 python pysixel.py animation.gif
+
+# 输出控制
+python pysixel.py -o output.six photo.png        # 输出到文件
+python pysixel.py -8 photo.png                    # 8bit DCS 模式
+python pysixel.py -R photo.png                    # GRI ≤255（VT240 兼容）
+
+# GIF 控制
+python pysixel.py -l disable animation.gif        # 播放一次，不循环
+python pysixel.py -g -l force animation.gif       # 忽略帧延迟，强制循环
+
+# 缩放与裁剪
+python pysixel.py -w 400 -H 300 photo.png         # 指定尺寸
+python pysixel.py -r lanczos3 -w 800 photo.png    # lanczos 重采样
+python pysixel.py -c 200x200+50+50 photo.png      # 裁剪区域
+
+# 颜色与质量
+python pysixel.py --colors 64 photo.png           # 64 色
+python pysixel.py -e photo.png                    # 单色（灰度）
+python pysixel.py -i photo.png                    # 反色（负片）
+python pysixel.py -B "#ffffff" photo.png          # 白色背景
+python pysixel.py -q high photo.png               # 高质量量化
+
+# 编码策略
+python pysixel.py -E fast animation.gif           # 跳过 RLE（更快）
+python pysixel.py -E size -o out.six photo.png    # 更小文件
+
+# 终端兼容
+python pysixel.py -P photo.png                    # tmux/screen 透传
+python pysixel.py --dither photo.png              # Bayer 抖动
+
+# 组合使用
+python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
 ```
 
-### 强制静态模式（仅显示第一帧）
+### 命令行参数一览
 
-```bash
-python pysixel.py --no-anim gif.gif
-```
-
-### 启用 Bayer 抖动
-
-```bash
-# 减少低色数图片的色带伪影
-python pysixel.py --dither pic.png
-```
-
-### 命令行选项
-
-| 选项 | 说明 |
-|------|------|
-| `--no-anim` | 强制静态模式 -- 仅显示 GIF 的第一帧 |
-| `--dither` | 启用 8x8 Bayer 有序抖动，减少色带伪影 |
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `image` | 图片文件路径（位置参数） | 必填 |
+| `--no-anim` | 静态模式，仅显示第一帧 | 关闭 |
+| `--dither` | 启用 Bayer 8×8 有序抖动 | 关闭 |
+| `--colors N` | 调色板颜色数（2-256） | 256 |
+| `--max-width COLS` | 最大终端列数 | 终端宽度 |
+| `-o FILE` | 输出到文件 | stdout |
+| `-l MODE` | GIF 循环模式：auto/force/disable | auto |
+| `-8` | 8bit DCS 模式 | 关闭（7bit） |
+| `-g` | 忽略 GIF 帧延迟 | 关闭 |
+| `-R` | GRI 限制 ≤255（VT240） | 关闭 |
+| `-w PX` | 输出宽度（像素） | 自动 |
+| `-H PX` | 输出高度（像素） | 自动 |
+| `-r FILTER` | 重采样算法：nearest/bilinear/bicubic/lanczos2/3/4/gaussian/hamming | bilinear |
+| `-c WxH+X+Y` | 裁剪区域 | 无 |
+| `-e` | 单色模式（灰度） | 关闭 |
+| `-B COLOR` | 背景颜色（#rrggbb） | 无 |
+| `-E MODE` | 编码策略：auto/fast/size | auto |
+| `-q MODE` | 质量：auto/low/high/full | auto |
+| `-P` | tmux/screen 透传 | 关闭 |
+| `-i` | 反色（负片） | 关闭 |
 
 ## 性能
 
@@ -104,6 +136,8 @@ python pysixel.py --dither pic.png
 | 每帧输出体积 | 71 KB（RLE 压缩 12 倍） |
 | vs 帧延迟目标 | 0.91x（实时） |
 | vs 朴素 Python 提速 | **13.2 倍**（单帧），**40.6 倍**（完整 GIF） |
+
+> **提示：** 在 GIF 播放场景中，若速度优先于输出体积，可使用 `-E fast` 跳过 RLE 编码以获得更高吞吐。反之，配合 `-o` 使用 `-E size` 可最小化保存文件的体积。
 
 ### 优化技术
 

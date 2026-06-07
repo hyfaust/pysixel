@@ -60,38 +60,70 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Display a Static Image
+### Quick Start
 
 ```bash
+# Basic usage
 python pysixel.py photo.png
-```
-
-### Play a GIF Animation
-
-```bash
-# Auto-detects GIF, loops playback, Ctrl+C to stop
 python pysixel.py animation.gif
+
+# Output control
+python pysixel.py -o output.six photo.png        # output to file
+python pysixel.py -8 photo.png                    # 8bit DCS mode
+python pysixel.py -R photo.png                    # GRI ≤255 (VT240 compat)
+
+# GIF control
+python pysixel.py -l disable animation.gif        # play once, no loop
+python pysixel.py -g -l force animation.gif       # ignore delay, force loop
+
+# Resize & crop
+python pysixel.py -w 400 -H 300 photo.png         # explicit size
+python pysixel.py -r lanczos3 -w 800 photo.png    # lanczos resampling
+python pysixel.py -c 200x200+50+50 photo.png      # crop region
+
+# Color & quality
+python pysixel.py --colors 64 photo.png           # 64 colors
+python pysixel.py -e photo.png                    # monochrome
+python pysixel.py -i photo.png                    # inverse (negative)
+python pysixel.py -B "#ffffff" photo.png          # white background
+python pysixel.py -q high photo.png               # high quality quantize
+
+# Encoding strategy
+python pysixel.py -E fast animation.gif           # skip RLE (faster)
+python pysixel.py -E size -o out.six photo.png    # smaller file
+
+# Terminal compatibility
+python pysixel.py -P photo.png                    # tmux/screen passthrough
+python pysixel.py --dither photo.png              # Bayer dithering
+
+# Combined
+python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
 ```
 
-### Force Static Mode (First Frame Only)
+### Command-Line Reference
 
-```bash
-python pysixel.py --no-anim gif.gif
-```
-
-### Enable Bayer Dithering
-
-```bash
-# Reduces color banding for images with limited palette
-python pysixel.py --dither pic.png
-```
-
-### Command-Line Options
-
-| Option | Description |
-|--------|-------------|
-| `--no-anim` | Force static mode -- display only the first frame of GIFs |
-| `--dither` | Enable 8x8 Bayer ordered dithering to reduce color banding |
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `image` | Image file path (positional) | required |
+| `--no-anim` | Static mode, show first frame only | off |
+| `--dither` | Enable Bayer 8×8 ordered dithering | off |
+| `--colors N` | Palette colors (2-256) | 256 |
+| `--max-width COLS` | Max terminal columns | terminal width |
+| `-o FILE` | Output to file | stdout |
+| `-l MODE` | GIF loop: auto/force/disable | auto |
+| `-8` | 8bit DCS mode | off (7bit) |
+| `-g` | Ignore GIF frame delay | off |
+| `-R` | GRI limit ≤255 (VT240) | off |
+| `-w PX` | Output width in pixels | auto |
+| `-H PX` | Output height in pixels | auto |
+| `-r FILTER` | Resampling: nearest/bilinear/bicubic/lanczos2/3/4/gaussian/hamming | bilinear |
+| `-c WxH+X+Y` | Crop region | none |
+| `-e` | Monochrome (grayscale) | off |
+| `-B COLOR` | Background color (#rrggbb) | none |
+| `-E MODE` | Encode policy: auto/fast/size | auto |
+| `-q MODE` | Quality: auto/low/high/full | auto |
+| `-P` | tmux/screen passthrough | off |
+| `-i` | Invert colors (negative) | off |
 
 ## Performance
 
@@ -104,6 +136,8 @@ Benchmarked on a 500x500 GIF with 33 frames (target frame delay: 30ms/frame).
 | Output size per frame | 71 KB (12x compression via RLE) |
 | vs. frame delay target | 0.91x (real-time) |
 | Speedup vs. naive Python | **13.2x** (single frame), **40.6x** (full GIF) |
+
+> **Tip:** For GIF playback where speed matters more than output size, use `-E fast` to skip RLE encoding and gain additional throughput. Conversely, use `-E size` with `-o` to minimize file size for saved output.
 
 ### Optimization Techniques
 
