@@ -58,20 +58,81 @@ def quantize(img, max_colors=256, dither=False):
     return rgb.quantize(max_colors, method=Image.Quantize.MEDIANCUT)
 
 
-def _resize_for_terminal(img, max_px_width):
-    """缩放图片以适应终端宽度，补偿字符宽高比。"""
-    w, h = img.size
-    char_aspect = 0.5
-    if w > max_px_width:
-        ratio = max_px_width / w
-        w, h = max_px_width, int(h * ratio)
-    h = int(h * char_aspect)
-    return img.resize((w, h), Image.Resampling.LANCZOS)
+_RESAMPLE_FILTERS = {
+    "nearest": Image.Resampling.NEAREST,
+    "bilinear": Image.Resampling.BILINEAR,
+    "bicubic": Image.Resampling.BICUBIC,
+    "lanczos2": Image.Resampling.LANCZOS,
+    "lanczos3": Image.Resampling.LANCZOS,
+    "lanczos4": Image.Resampling.LANCZOS,
+    "gaussian": Image.Resampling.BOX,
+    "hamming": Image.Resampling.HAMMING,
+}
 
 
-def _preprocess_frame(img, max_px_width=640, max_colors=256, dither=False):
-    """预处理一帧：resize → quantize → numpy array + palette。"""
-    img = _resize_for_terminal(img, max_px_width)
+def _parse_color(color_str):
+    """解析颜色字符串，返回 (R, G, B) 元组。"""
+    s = color_str.strip().lstrip("#")
+    if len(s) == 3:
+        return (int(s[0]*2, 16), int(s[1]*2, 16), int(s[2]*2, 16))
+    if len(s) == 6:
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+    raise ValueError(f"无法解析颜色: {color_str}")
+
+
+def _parse_crop(crop_str):
+    """解析裁剪字符串 'WxH+X+Y'，返回 (x, y, w, h)。"""
+    import re
+    m = re.match(r"(\d+)x(\d+)\+(\d+)\+(\d+)", crop_str)
+    if not m:
+        raise ValueError(f"无法解析裁剪: {crop_str} (格式: WxH+X+Y)")
+    w, h, x, y = int(m[1]), int(m[2]), int(m[3]), int(m[4])
+    return (x, y, x + w, y + h)
+
+
+def _resize_for_terminal(img, max_px_width, target_w=None, target_h=None, resample="bilinear"):
+    """缩放图片。优先使用 target_w/target_h，否则按 max_px_width 自动缩放。"""
+    resample_filter = _RESAMPLE_FILTERS.get(resample, Image.Resampling.LANCZOS)
+
+    if target_w or target_h:
+        # 显式指定宽高
+        w, h = img.size
+        if target_w and target_h:
+            w, h = target_w, target_h
+        elif target_w:
+            ratio = target_w / w
+            w, h = target_w, int(h * ratio)
+        else:
+            ratio = target_h / h
+            w, h = int(w * ratio), target_h
+        return img.resize((w, h), resample_filter)
+    else:
+        # 自动缩放（适应终端宽度，补偿字符宽高比）
+        w, h = img.size
+        char_aspect = 0.5
+        if w > max_px_width:
+            ratio = max_px_width / w
+            w, h = max_px_width, int(h * ratio)
+        h = int(h * char_aspect)
+        return img.resize((w, h), resample_filter)
+
+
+def _preprocess_frame(img, max_px_width=640, max_colors=256, dither=False,
+                      target_w=None, target_h=None, resample="bilinear",
+                      crop=None, monochrome=False, bgcolor=None):
+    """预处理一帧：crop → resize → monochrome/bgcolor → quantize → numpy。"""
+    if crop:
+        img = img.crop(crop)
+    if bgcolor:
+        bg = Image.new("RGB", img.size, bgcolor)
+        if img.mode == "RGBA":
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+        else:
+            img = img.convert("RGB")
+    img = _resize_for_terminal(img, max_px_width, target_w=target_w, target_h=target_h, resample=resample)
+    if monochrome:
+        img = img.convert("L")
     img = quantize(img, max_colors=max_colors, dither=dither)
     palette = img.getpalette()
     w, h = img.size
@@ -179,7 +240,9 @@ def encode_sixel(pixels_np, palette_colors, w, h, eight_bit=False, gri_limit=Fal
     return bytes(parts), sixel_bands
 
 
-def get_gif_frames(path, max_px_width=640, max_colors=256, dither=False):
+def get_gif_frames(path, max_px_width=640, max_colors=256, dither=False,
+                   target_w=None, target_h=None, resample="bilinear",
+                   crop=None, monochrome=False, bgcolor=None):
     """提取 GIF 所有帧，返回 (帧列表, 延迟列表) 或 (None, None)。"""
     img = Image.open(path)
     if not getattr(img, "is_animated", False) or img.n_frames <= 1:
@@ -204,7 +267,9 @@ def get_gif_frames(path, max_px_width=640, max_colors=256, dither=False):
         canvas.paste(frame, (0, 0), frame if frame.mode == "RGBA" else None)
 
         pixels_np, palette_colors, w, h = _preprocess_frame(
-            canvas.copy(), max_px_width=max_px_width, max_colors=max_colors, dither=dither
+            canvas.copy(), max_px_width=max_px_width, max_colors=max_colors, dither=dither,
+            target_w=target_w, target_h=target_h, resample=resample,
+            crop=crop, monochrome=monochrome, bgcolor=bgcolor
         )
         frame_arrays.append((pixels_np, palette_colors, w, h))
 
@@ -238,9 +303,15 @@ def _write(out, data):
 
 def play_gif(path, max_px_width=640, max_colors=256, dither=False,
              output_file=None, loopmode="auto", eight_bit=False,
-             gri_limit=False, ignore_delay=False):
+             gri_limit=False, ignore_delay=False,
+             target_w=None, target_h=None, resample="bilinear",
+             crop=None, monochrome=False, bgcolor=None):
     """在终端中播放 GIF 动画（流式编码 + 帧间差分）。"""
-    frame_arrays, delays = get_gif_frames(path, max_px_width=max_px_width, max_colors=max_colors, dither=dither)
+    frame_arrays, delays = get_gif_frames(
+        path, max_px_width=max_px_width, max_colors=max_colors, dither=dither,
+        target_w=target_w, target_h=target_h, resample=resample,
+        crop=crop, monochrome=monochrome, bgcolor=bgcolor
+    )
     if frame_arrays is None:
         return False
 
@@ -311,11 +382,15 @@ def play_gif(path, max_px_width=640, max_colors=256, dither=False,
 
 
 def show_static(path, max_px_width=640, max_colors=256, dither=False,
-                output_file=None, eight_bit=False, gri_limit=False):
+                output_file=None, eight_bit=False, gri_limit=False,
+                target_w=None, target_h=None, resample="bilinear",
+                crop=None, monochrome=False, bgcolor=None):
     """显示静态图片。"""
     img = Image.open(path)
     pixels_np, palette_colors, w, h = _preprocess_frame(
-        img, max_px_width=max_px_width, max_colors=max_colors, dither=dither
+        img, max_px_width=max_px_width, max_colors=max_colors, dither=dither,
+        target_w=target_w, target_h=target_h, resample=resample,
+        crop=crop, monochrome=monochrome, bgcolor=bgcolor
     )
     sixel_data, _ = encode_sixel(
         pixels_np, palette_colors, w, h,
@@ -351,7 +426,7 @@ def main():
                         help="调色板颜色数 (2-256, 默认 256)")
     parser.add_argument("--max-width", type=int, default=default_cols, metavar="COLS",
                         help=f"最大终端列宽 (默认 {default_cols}, 即终端实际宽度)")
-    # 批次 1 新增参数
+    # 批次 1 参数
     parser.add_argument("-o", "--output", metavar="FILE", help="输出到文件而非终端")
     parser.add_argument("-l", "--loop", choices=["auto", "force", "disable"], default="auto",
                         help="GIF 循环模式: auto(默认) / force / disable")
@@ -359,6 +434,15 @@ def main():
     parser.add_argument("-8", dest="bit8", action="store_true", help="8bit DCS 模式")
     parser.add_argument("-g", "--no-delay", action="store_true", help="忽略 GIF 帧延迟，尽快播放")
     parser.add_argument("-R", "--gri-limit", action="store_true", help="限制 GRI 参数 ≤ 255 (VT240 兼容)")
+    # 批次 2 参数
+    parser.add_argument("-w", "--width", type=int, metavar="PX", help="输出宽度 (像素)")
+    parser.add_argument("-H", "--height", type=int, metavar="PX", help="输出高度 (像素)")
+    parser.add_argument("-r", "--resample", default="bilinear",
+                        choices=list(_RESAMPLE_FILTERS.keys()),
+                        help="重采样滤波器 (默认 bilinear)")
+    parser.add_argument("-c", "--crop", metavar="WxH+X+Y", help="裁剪区域 (如 100x100+10+10)")
+    parser.add_argument("-e", "--monochrome", action="store_true", help="单色模式 (灰度)")
+    parser.add_argument("-B", "--bgcolor", metavar="COLOR", help="背景色 (如 #ffffff)")
 
     args = parser.parse_args()
 
@@ -372,9 +456,15 @@ def main():
     eight_bit = args.bit8
     gri_limit = args.gri_limit
 
+    # 解析批次 2 参数
+    crop_box = _parse_crop(args.crop) if args.crop else None
+    bgcolor_rgb = _parse_color(args.bgcolor) if args.bgcolor else None
+
     common = dict(
         max_px_width=max_px_width, max_colors=max_colors, dither=args.dither,
         output_file=args.output, eight_bit=eight_bit, gri_limit=gri_limit,
+        target_w=args.width, target_h=args.height, resample=args.resample,
+        crop=crop_box, monochrome=args.monochrome, bgcolor=bgcolor_rgb,
     )
 
     if not args.no_anim:
