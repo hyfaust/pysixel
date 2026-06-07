@@ -21,7 +21,7 @@ Python Sixel toolkit — encoding, decoding, and viewing tools for Sixel graphic
   - [Features](#features-1)
   - [Quick Start](#quick-start-1)
   - [Command-Line Reference](#command-line-reference-1)
-- [sixview — Adaptive Viewer](#sixview--adaptive-viewer)
+- [pysixview — Adaptive Viewer](#pysixview--adaptive-viewer)
 - [Performance](#performance)
 - [Project Structure](#project-structure)
 - [Technical Documentation](#technical-documentation)
@@ -35,7 +35,7 @@ Python Sixel toolkit — encoding, decoding, and viewing tools for Sixel graphic
 |------|-------------|---------------------|
 | `pyimg2six.py` | Image → Sixel encoder & terminal viewer | `img2sixel` |
 | `pysix2png.py` | Sixel → PNG decoder | `sixel2png` |
-| `sixview.py` | Adaptive Sixel viewer — auto-scales wide images to terminal width | -- |
+| `pysixview.py` | Adaptive Sixel viewer — auto-scales wide images to terminal width | -- |
 
 ## Prerequisites
 
@@ -185,22 +185,32 @@ python pysix2png.py -V
 
 ---
 
-## sixview — Adaptive Viewer
+## pysixview — Adaptive Viewer
 
 Auto-detects terminal width, scales wide Sixel images to fit, passes through narrow ones unchanged.
 
 ```bash
 # View a .six file (auto-scales if wider than terminal)
-python sixview.py image.six
+python pysixview.py image.six
 
 # Specify max pixel width manually
-python sixview.py -w 800 image.six
+python pysixview.py -w 800 image.six
+
+# Show image dimensions
+python pysixview.py -i image.six
+
+# Adjust multiplier and save
+python pysixview.py -m 8 --save image.six
 ```
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `input` | Sixel file path (positional) | required |
-| `-w PX` | Max pixel width | terminal columns × 8 |
+| `-w PX` | Max pixel width | terminal columns × multiplier |
+| `-m N` | Terminal column multiplier | 8 (saved in ~/.sixview.conf) |
+| `--save` | Save multiplier to config | off |
+| `-i, --info` | Show image dimensions and exit | off |
+| `--no-resize` | Pass through without scaling | off |
 
 ---
 
@@ -240,7 +250,7 @@ Benchmarked on a 500x500 GIF with 33 frames (target frame delay: 30ms/frame).
 pysixel/
 ├── pyimg2six.py               # Image → Sixel encoder (img2sixel equivalent)
 ├── pysix2png.py               # Sixel → PNG decoder (sixel2png equivalent)
-├── sixview.py                 # Adaptive Sixel viewer (auto-scale to terminal)
+├── pysixview.py                 # Adaptive Sixel viewer (auto-scale to terminal)
 ├── README.md                  # English documentation
 ├── README_zh.md               # Chinese documentation
 ├── docs/                      # Technical documentation

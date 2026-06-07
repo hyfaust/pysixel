@@ -21,7 +21,7 @@ Python Sixel 工具集 — Sixel 图形的编码、解码和自适应查看，�
   - [特性](#特性-1)
   - [快速开始](#快速开始-1)
   - [命令行参数一览](#命令行参数一览-1)
-- [sixview — 自适应查看器](#sixview--自适应查看器)
+- [pysixview — 自适应查看器](#pysixview--自适应查看器)
 - [性能](#性能)
 - [项目结构](#项目结构)
 - [技术文档](#技术文档)
@@ -35,7 +35,7 @@ Python Sixel 工具集 — Sixel 图形的编码、解码和自适应查看，�
 |------|------|---------------|
 | `pyimg2six.py` | 图片 → Sixel 编码器 & 终端查看器 | `img2sixel` |
 | `pysix2png.py` | Sixel → PNG 解码器 | `sixel2png` |
-| `sixview.py` | 自适应 Sixel 查看器 — 超宽图像自动缩放至终端宽度 | -- |
+| `pysixview.py` | 自适应 Sixel 查看器 — 超宽图像自动缩放至终端宽度 | -- |
 
 ## 环境要求
 
@@ -185,22 +185,32 @@ python pysix2png.py -V
 
 ---
 
-## sixview — 自适应查看器
+## pysixview — 自适应查看器
 
 自动检测终端宽度，超宽 Sixel 图像缩放后输出，未超宽直接输出。
 
 ```bash
 # 查看 .six 文件（超宽时自动缩放）
-python sixview.py image.six
+python pysixview.py image.six
 
 # 手动指定最大像素宽度
-python sixview.py -w 800 image.six
+python pysixview.py -w 800 image.six
+
+# 显示图像尺寸
+python pysixview.py -i image.six
+
+# 调整乘数并保存
+python pysixview.py -m 8 --save image.six
 ```
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `input` | Sixel 文件路径（位置参数） | 必填 |
-| `-w PX` | 最大像素宽度 | 终端列数 × 8 |
+| `-w PX` | 最大像素宽度 | 终端列数 × 乘数 |
+| `-m N` | 终端列数乘数 | 8（保存在 ~/.sixview.conf） |
+| `--save` | 保存乘数到配置文件 | 关闭 |
+| `-i, --info` | 显示图像尺寸后退出 | 关闭 |
+| `--no-resize` | 不缩放，直接输出 | 关闭 |
 
 ---
 
@@ -240,7 +250,7 @@ python sixview.py -w 800 image.six
 pysixel/
 ├── pyimg2six.py               # 图片→Sixel 编码器（img2sixel 等价）
 ├── pysix2png.py               # Sixel→PNG 解码器（sixel2png 等价）
-├── sixview.py                 # 自适应 Sixel 查看器（自动缩放至终端宽度）
+├── pysixview.py                 # 自适应 Sixel 查看器（自动缩放至终端宽度）
 ├── README.md                  # 英文文档
 ├── README_zh.md               # 中文文档
 ├── docs/                      # 技术文档
