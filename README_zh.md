@@ -6,14 +6,21 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-一款快速的终端图片查看器，使用 Sixel 图形协议，通过 numpy 向量化编码实现高效的 GIF 动画播放。
+Python Sixel 工具集 — 两个命令行工具，用于 Sixel 图形的编码和解码，灵感来自 libsixel 的 `img2sixel` 和 `sixel2png`。
 
 ## 目录
 
-- [特性](#特性)
+- [工具一览](#工具一览)
 - [环境要求](#环境要求)
 - [安装](#安装)
-- [使用方法](#使用方法)
+- [pyimg2six — 图片转 Sixel](#pyimg2six--图片转-sixel)
+  - [特性](#特性)
+  - [快速开始](#快速开始)
+  - [命令行参数一览](#命令行参数一览)
+- [pysix2png — Sixel 转 PNG](#pysix2png--sixel-转-png)
+  - [特性](#特性-1)
+  - [快速开始](#快速开始-1)
+  - [命令行参数一览](#命令行参数一览-1)
 - [性能](#性能)
 - [项目结构](#项目结构)
 - [技术文档](#技术文档)
@@ -21,15 +28,12 @@
 - [致谢](#致谢)
 - [许可证](#许可证)
 
-## 特性
+## 工具一览
 
-- **Sixel 图片显示** — 在支持 Sixel 的终端中渲染 PIL 支持的所有图片格式（PNG、JPEG、GIF、BMP、WebP 等）
-- **GIF 动画播放** — 自动检测动画 GIF，循环播放，帧级精确计时；按 `Ctrl+C` 停止
-- **numpy 向量化编码** — 用数组操作替代逐像素访问，相比朴素 Python 实现提速 13 倍
-- **实时 GIF 播放** — 流式逐帧编码 + 自适应延迟，500x500 GIF 实现 33ms/帧
-- **RLE 压缩** — 通过 Sixel 游程编码实现 12 倍输出体积压缩
-- **Bayer 抖动** — 可选的 8x8 有序抖动（`--dither`），减少低色数图片的色带伪影
-- **零 GPU 依赖** — 纯 CPU 编码，基于 numpy 加速
+| 工具 | 说明 | libsixel 对应 |
+|------|------|---------------|
+| `pyimg2six.py` | 图片 → Sixel 编码器 & 终端查看器 | `img2sixel` |
+| `pysix2png.py` | Sixel → PNG 解码器 | `sixel2png` |
 
 ## 环境要求
 
@@ -37,8 +41,8 @@
 |------|------|----------|
 | Python | >= 3.9 | 是 |
 | Pillow | >= 9.0 | 是 |
-| numpy | >= 1.20 | 是 |
-| 支持 Sixel 的终端 | -- | 是 |
+| numpy | >= 1.20 | 是（仅 pyimg2six） |
+| 支持 Sixel 的终端 | -- | 是（仅显示时） |
 
 **支持的终端：** Windows Terminal (>= 1.22)、xterm、WezTerm、mlterm、foot 等支持 Sixel 协议的终端。
 
@@ -58,46 +62,61 @@ cd pysixel
 pip install -r requirements.txt
 ```
 
-## 使用方法
+---
+
+## pyimg2six — 图片转 Sixel
+
+### 特性
+
+- **Sixel 图片显示** — 在支持 Sixel 的终端中渲染 PIL 支持的所有图片格式（PNG、JPEG、GIF、BMP、WebP 等）
+- **GIF 动画播放** — 自动检测动画 GIF，循环播放，帧级精确计时；按 `Ctrl+C` 停止
+- **numpy 向量化编码** — 用数组操作替代逐像素访问，相比朴素 Python 实现提速 13 倍
+- **实时 GIF 播放** — 流式逐帧编码 + 自适应延迟，500x500 GIF 实现 33ms/帧
+- **RLE 压缩** — 通过 Sixel 游程编码实现 12 倍输出体积压缩
+- **抖动模式** — Bayer 8x8 有序抖动和 Floyd-Steinberg 误差扩散（`-d bayer` / `-d fs`）
+- **保持原始分辨率** — `--no-resize` 选项，不缩放图片
+- **零 GPU 依赖** — 纯 CPU 编码，基于 numpy 加速
 
 ### 快速开始
 
 ```bash
 # 基本用法
-python pysixel.py photo.png
-python pysixel.py animation.gif
+python pyimg2six.py photo.png
+python pyimg2six.py animation.gif
 
 # 输出控制
-python pysixel.py -o output.six photo.png        # 输出到文件
-python pysixel.py -8 photo.png                    # 8bit DCS 模式
-python pysixel.py -R photo.png                    # GRI ≤255（VT240 兼容）
+python pyimg2six.py -o output.six photo.png        # 输出到文件
+python pyimg2six.py -8 photo.png                    # 8bit DCS 模式
+python pyimg2six.py -R photo.png                    # GRI ≤255（VT240 兼容）
 
 # GIF 控制
-python pysixel.py -l disable animation.gif        # 播放一次，不循环
-python pysixel.py -g -l force animation.gif       # 忽略帧延迟，强制循环
+python pyimg2six.py -l disable animation.gif        # 播放一次，不循环
+python pyimg2six.py -g -l force animation.gif       # 忽略帧延迟，强制循环
 
 # 缩放与裁剪
-python pysixel.py -w 400 -H 300 photo.png         # 指定尺寸
-python pysixel.py -r lanczos3 -w 800 photo.png    # lanczos 重采样
-python pysixel.py -c 200x200+50+50 photo.png      # 裁剪区域
+python pyimg2six.py -w 400 -H 300 photo.png         # 指定尺寸
+python pyimg2six.py -r lanczos3 -w 800 photo.png    # lanczos 重采样
+python pyimg2six.py -c 200x200+50+50 photo.png      # 裁剪区域
 
 # 颜色与质量
-python pysixel.py --colors 64 photo.png           # 64 色
-python pysixel.py -e photo.png                    # 单色（灰度）
-python pysixel.py -i photo.png                    # 反色（负片）
-python pysixel.py -B "#ffffff" photo.png          # 白色背景
-python pysixel.py -q high photo.png               # 高质量量化
+python pyimg2six.py --colors 64 photo.png           # 64 色
+python pyimg2six.py -e photo.png                    # 单色（灰度）
+python pyimg2six.py -i photo.png                    # 反色（负片）
+python pyimg2six.py -B "#ffffff" photo.png          # 白色背景
+python pyimg2six.py -q high photo.png               # 高质量量化
 
 # 编码策略
-python pysixel.py -E fast animation.gif           # 跳过 RLE（更快）
-python pysixel.py -E size -o out.six photo.png    # 更小文件
+python pyimg2six.py -E fast animation.gif           # 跳过 RLE（更快）
+python pyimg2six.py -E size -o out.six photo.png    # 更小文件
 
 # 终端兼容
-python pysixel.py -P photo.png                    # tmux/screen 透传
-python pysixel.py --dither photo.png              # Bayer 抖动
+python pyimg2six.py -P photo.png                    # tmux/screen 透传
+python pyimg2six.py -d bayer photo.png              # Bayer 有序抖动
+python pyimg2six.py -d fs photo.png                 # Floyd-Steinberg 误差扩散
+python pyimg2six.py --no-resize photo.png           # 保持原始分辨率
 
 # 组合使用
-python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
+python pyimg2six.py -w 640 --colors 128 -r lanczos3 -o output.six photo.png
 ```
 
 ### 命令行参数一览
@@ -106,9 +125,10 @@ python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
 |------|------|--------|
 | `image` | 图片文件路径（位置参数） | 必填 |
 | `--no-anim` | 静态模式，仅显示第一帧 | 关闭 |
-| `--dither` | 启用 Bayer 8×8 有序抖动 | 关闭 |
+| `-d MODE` | 抖动模式：none/bayer/fs | none |
 | `--colors N` | 调色板颜色数（2-256） | 256 |
 | `--max-width COLS` | 最大终端列数 | 终端宽度 |
+| `--no-resize` | 保持原始分辨率，不缩放 | 关闭 |
 | `-o FILE` | 输出到文件 | stdout |
 | `-l MODE` | GIF 循环模式：auto/force/disable | auto |
 | `-8` | 8bit DCS 模式 | 关闭（7bit） |
@@ -124,6 +144,42 @@ python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
 | `-q MODE` | 质量：auto/low/high/full | auto |
 | `-P` | tmux/screen 透传 | 关闭 |
 | `-i` | 反色（负片） | 关闭 |
+
+---
+
+## pysix2png — Sixel 转 PNG
+
+### 特性
+
+- **纯 Python Sixel 解码器** — 基于 libsixel 1.8.7 的 `fromsixel.c` 状态机实现，无 C 依赖
+- **标准输入/输出支持** — 从文件或 stdin 读取，写入文件或 stdout
+- **完整颜色支持** — RGB 和 HLS 颜色定义，256 色调色板
+- **光栅属性处理** — 正确解析 Pan/Pad/Ph/Pv 宽高比和尺寸属性
+- **重复与 RLE 解码** — 处理 Sixel 重复引入符（`!Pn`）和所有控制序列
+
+### 快速开始
+
+```bash
+# 将 Sixel 文件转换为 PNG
+python pysix2png.py -i input.sixel -o output.png
+
+# 从 stdin 读取，写入 stdout（管道友好）
+cat input.sixel | python pysix2png.py > output.png
+
+# 显示版本
+python pysix2png.py -V
+```
+
+### 命令行参数一览
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-i, --input` | 输入 Sixel 文件（`-` 表示 stdin） | stdin |
+| `-o, --output` | 输出 PNG 文件（`-` 表示 stdout） | stdout |
+| `-V, --version` | 显示版本信息 | -- |
+| `-H, --help` | 显示帮助信息 | -- |
+
+---
 
 ## 性能
 
@@ -154,7 +210,8 @@ python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
 
 ```
 pysixel/
-├── pysixel.py                 # 主脚本
+├── pyimg2six.py               # 图片→Sixel 编码器（img2sixel 等价）
+├── pysix2png.py               # Sixel→PNG 解码器（sixel2png 等价）
 ├── README.md                  # 英文文档
 ├── README_zh.md               # 中文文档
 ├── docs/                      # 技术文档

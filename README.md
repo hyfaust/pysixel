@@ -6,14 +6,21 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-A fast terminal image viewer using the Sixel graphics protocol, with optimized GIF animation support powered by numpy vectorized encoding.
+Python Sixel toolkit — two command-line tools for encoding and decoding Sixel graphics, inspired by libsixel's `img2sixel` and `sixel2png`.
 
 ## Table of Contents
 
-- [Features](#features)
+- [Tools](#tools)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-- [Usage](#usage)
+- [pyimg2six — Image to Sixel](#pyimg2six--image-to-sixel)
+  - [Features](#features)
+  - [Quick Start](#quick-start)
+  - [Command-Line Reference](#command-line-reference)
+- [pysix2png — Sixel to PNG](#pysix2png--sixel-to-png)
+  - [Features](#features-1)
+  - [Quick Start](#quick-start-1)
+  - [Command-Line Reference](#command-line-reference-1)
 - [Performance](#performance)
 - [Project Structure](#project-structure)
 - [Technical Documentation](#technical-documentation)
@@ -21,15 +28,12 @@ A fast terminal image viewer using the Sixel graphics protocol, with optimized G
 - [Acknowledgments](#acknowledgments)
 - [License](#license)
 
-## Features
+## Tools
 
-- **Sixel image display** — Renders any PIL-supported image format (PNG, JPEG, GIF, BMP, WebP, etc.) in Sixel-capable terminals
-- **GIF animation playback** — Automatic detection and smooth looping of animated GIFs with frame-accurate timing; press `Ctrl+C` to stop
-- **Numpy vectorized encoding** — 13x speedup over naive Python by replacing per-pixel access with array operations
-- **Real-time GIF playback** — Streaming per-frame encode with adaptive delay, achieving 33ms/frame for 500x500 GIFs
-- **RLE compression** — 12x output size reduction via Sixel Run-Length Encoding
-- **Bayer dithering** — Optional 8x8 ordered dithering (`--dither`) to reduce color banding in low-palette images
-- **Zero GPU dependency** — Pure CPU-based encoding using numpy
+| Tool | Description | Libsixel Equivalent |
+|------|-------------|---------------------|
+| `pyimg2six.py` | Image → Sixel encoder & terminal viewer | `img2sixel` |
+| `pysix2png.py` | Sixel → PNG decoder | `sixel2png` |
 
 ## Prerequisites
 
@@ -37,8 +41,8 @@ A fast terminal image viewer using the Sixel graphics protocol, with optimized G
 |------------|---------|----------|
 | Python     | >= 3.9  | Yes      |
 | Pillow     | >= 9.0  | Yes      |
-| numpy      | >= 1.20 | Yes      |
-| Sixel-capable terminal | -- | Yes |
+| numpy      | >= 1.20 | Yes (pyimg2six only) |
+| Sixel-capable terminal | -- | Yes (for display) |
 
 **Supported terminals:** Windows Terminal (>= 1.22), xterm, WezTerm, mlterm, foot, and other terminals with Sixel protocol support.
 
@@ -58,46 +62,61 @@ cd pysixel
 pip install -r requirements.txt
 ```
 
-## Usage
+---
+
+## pyimg2six — Image to Sixel
+
+### Features
+
+- **Sixel image display** — Renders any PIL-supported image format (PNG, JPEG, GIF, BMP, WebP, etc.) in Sixel-capable terminals
+- **GIF animation playback** — Automatic detection and smooth looping of animated GIFs with frame-accurate timing; press `Ctrl+C` to stop
+- **Numpy vectorized encoding** — 13x speedup over naive Python by replacing per-pixel access with array operations
+- **Real-time GIF playback** — Streaming per-frame encode with adaptive delay, achieving 33ms/frame for 500x500 GIFs
+- **RLE compression** — 12x output size reduction via Sixel Run-Length Encoding
+- **Dithering modes** — Bayer 8x8 ordered dithering and Floyd-Steinberg error diffusion (`-d bayer` / `-d fs`)
+- **Original resolution** — `--no-resize` flag to keep image at native pixel dimensions
+- **Zero GPU dependency** — Pure CPU-based encoding using numpy
 
 ### Quick Start
 
 ```bash
 # Basic usage
-python pysixel.py photo.png
-python pysixel.py animation.gif
+python pyimg2six.py photo.png
+python pyimg2six.py animation.gif
 
 # Output control
-python pysixel.py -o output.six photo.png        # output to file
-python pysixel.py -8 photo.png                    # 8bit DCS mode
-python pysixel.py -R photo.png                    # GRI ≤255 (VT240 compat)
+python pyimg2six.py -o output.six photo.png        # output to file
+python pyimg2six.py -8 photo.png                    # 8bit DCS mode
+python pyimg2six.py -R photo.png                    # GRI ≤255 (VT240 compat)
 
 # GIF control
-python pysixel.py -l disable animation.gif        # play once, no loop
-python pysixel.py -g -l force animation.gif       # ignore delay, force loop
+python pyimg2six.py -l disable animation.gif        # play once, no loop
+python pyimg2six.py -g -l force animation.gif       # ignore delay, force loop
 
 # Resize & crop
-python pysixel.py -w 400 -H 300 photo.png         # explicit size
-python pysixel.py -r lanczos3 -w 800 photo.png    # lanczos resampling
-python pysixel.py -c 200x200+50+50 photo.png      # crop region
+python pyimg2six.py -w 400 -H 300 photo.png         # explicit size
+python pyimg2six.py -r lanczos3 -w 800 photo.png    # lanczos resampling
+python pyimg2six.py -c 200x200+50+50 photo.png      # crop region
 
 # Color & quality
-python pysixel.py --colors 64 photo.png           # 64 colors
-python pysixel.py -e photo.png                    # monochrome
-python pysixel.py -i photo.png                    # inverse (negative)
-python pysixel.py -B "#ffffff" photo.png          # white background
-python pysixel.py -q high photo.png               # high quality quantize
+python pyimg2six.py --colors 64 photo.png           # 64 colors
+python pyimg2six.py -e photo.png                    # monochrome
+python pyimg2six.py -i photo.png                    # inverse (negative)
+python pyimg2six.py -B "#ffffff" photo.png          # white background
+python pyimg2six.py -q high photo.png               # high quality quantize
 
 # Encoding strategy
-python pysixel.py -E fast animation.gif           # skip RLE (faster)
-python pysixel.py -E size -o out.six photo.png    # smaller file
+python pyimg2six.py -E fast animation.gif           # skip RLE (faster)
+python pyimg2six.py -E size -o out.six photo.png    # smaller file
 
 # Terminal compatibility
-python pysixel.py -P photo.png                    # tmux/screen passthrough
-python pysixel.py --dither photo.png              # Bayer dithering
+python pyimg2six.py -P photo.png                    # tmux/screen passthrough
+python pyimg2six.py -d bayer photo.png              # Bayer ordered dithering
+python pyimg2six.py -d fs photo.png                 # Floyd-Steinberg dithering
+python pyimg2six.py --no-resize photo.png           # keep original resolution
 
 # Combined
-python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
+python pyimg2six.py -w 640 --colors 128 -r lanczos3 -o output.six photo.png
 ```
 
 ### Command-Line Reference
@@ -106,9 +125,10 @@ python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
 |-----------|-------------|---------|
 | `image` | Image file path (positional) | required |
 | `--no-anim` | Static mode, show first frame only | off |
-| `--dither` | Enable Bayer 8×8 ordered dithering | off |
+| `-d MODE` | Dithering: none/bayer/fs | none |
 | `--colors N` | Palette colors (2-256) | 256 |
 | `--max-width COLS` | Max terminal columns | terminal width |
+| `--no-resize` | Keep original resolution, no scaling | off |
 | `-o FILE` | Output to file | stdout |
 | `-l MODE` | GIF loop: auto/force/disable | auto |
 | `-8` | 8bit DCS mode | off (7bit) |
@@ -124,6 +144,42 @@ python pysixel.py -w 640 --colors 128 -d fs -r lanczos3 -o output.six photo.png
 | `-q MODE` | Quality: auto/low/high/full | auto |
 | `-P` | tmux/screen passthrough | off |
 | `-i` | Invert colors (negative) | off |
+
+---
+
+## pysix2png — Sixel to PNG
+
+### Features
+
+- **Pure Python Sixel decoder** — State machine based on libsixel 1.8.7's `fromsixel.c`, no C dependencies
+- **Standard input/output support** — Reads from file or stdin, writes to file or stdout
+- **Full color support** — RGB and HLS color definitions, 256-color palette
+- **Raster attribute handling** — Correctly parses Pan/Pad/Ph/Pv aspect ratio and dimension attributes
+- **Repeat & RLE decoding** — Handles Sixel repeat introducer (`!Pn`) and all control sequences
+
+### Quick Start
+
+```bash
+# Convert a Sixel file to PNG
+python pysix2png.py -i input.sixel -o output.png
+
+# Read from stdin, write to stdout (pipe-friendly)
+cat input.sixel | python pysix2png.py > output.png
+
+# Show version
+python pysix2png.py -V
+```
+
+### Command-Line Reference
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-i, --input` | Input Sixel file (or `-` for stdin) | stdin |
+| `-o, --output` | Output PNG file (or `-` for stdout) | stdout |
+| `-V, --version` | Show version info | -- |
+| `-H, --help` | Show help | -- |
+
+---
 
 ## Performance
 
@@ -154,7 +210,8 @@ Benchmarked on a 500x500 GIF with 33 frames (target frame delay: 30ms/frame).
 
 ```
 pysixel/
-├── pysixel.py                 # Main script
+├── pyimg2six.py               # Image → Sixel encoder (img2sixel equivalent)
+├── pysix2png.py               # Sixel → PNG decoder (sixel2png equivalent)
 ├── README.md                  # English documentation
 ├── README_zh.md               # Chinese documentation
 ├── docs/                      # Technical documentation

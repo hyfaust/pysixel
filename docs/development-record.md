@@ -695,3 +695,28 @@ stdout.buffer.write() → 终端渲染
 | GIF 33 帧 | 48.4s | 1.2s | **40.6x** |
 | 输出体积/帧 | 860KB | 70KB | **12.3x** |
 | 内存行为 | 帧 3 退化 | 全程稳定 | 修复 |
+
+---
+
+## 17. 项目拆分
+
+### 17.1 背景
+
+原始的 `pysixel.py` 是一个单文件脚本，同时包含图片→Sixel 编码（`img2sixel`）和终端显示功能。为了与 libscel 的工具结构对齐，并为未来独立使用编码器和解码器提供便利，项目被拆分为两个独立脚本。
+
+### 17.2 拆分方案
+
+| 脚本 | 功能 | libsixel 对应 |
+|------|------|---------------|
+| `pyimg2six.py` | 图片 → Sixel 编码 & 终端显示 | `img2sixel` |
+| `pysix2png.py` | Sixel → PNG 解码 | `sixel2png` |
+
+### 17.3 pysix2png 解码器
+
+`pysix2png.py` 基于 libsixel 1.8.7 的 `fromsixel.c` 状态机实现，是一个纯 Python 的 Sixel 解码器。主要特点：
+
+- 7 状态有限状态机（PS_GROUND → PS_ESC → PS_DCS → PS_DECSIXEL 等）
+- 支持 RGB 和 HLS 两种颜色定义模式
+- 支持光栅属性（Pan/Pad/Ph/Pv）和重复引入符（`!Pn`）
+- 256 色调色板，预初始化 16 色默认表 + 6x6x6 色立方体 + 24 级灰度
+- 支持文件和标准输入/输出，管道友好

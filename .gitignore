@@ -18,3 +18,5 @@ Thumbs.db
 
 # Test files
 test.jpg
+*.sixel
+*.six

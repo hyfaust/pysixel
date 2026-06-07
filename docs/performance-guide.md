@@ -1,6 +1,6 @@
 # pysixel 性能优化指南
 
-> 适用版本：pysixel (sixel-show.py) v2
+> 适用版本：pysixel (pyimg2six.py) v2
 > 最后更新：2026-06-07
 > 项目地址：https://github.com/hyfaust/pysixel
 > 许可证：GPL v3
@@ -362,16 +362,16 @@ sys.stdout.flush()                       # 立即刷新
 
 ```bash
 # 播放 GIF 动画（自动检测，循环播放，Ctrl+C 停止）
-python sixel-show.py animation.gif
+python pyimg2six.py animation.gif
 
 # 强制静态模式（只显示第一帧）
-python sixel-show.py --no-anim animation.gif
+python pyimg2six.py --no-anim animation.gif
 
 # 启用 Bayer 有序抖动（减少色带，编码耗时 +80%）
-python sixel-show.py --dither photo.png
+python pyimg2six.py --dither photo.png
 
 # 显示静态图片
-python sixel-show.py photo.png
+python pyimg2six.py photo.png
 ```
 
 ### 依赖
@@ -416,22 +416,22 @@ pysixel 提供 14 个 CLI 参数，部分对编码性能有直接影响：
 
 **实时 GIF 播放（速度优先）：**
 ```bash
-pysixel.py -E fast --colors 64 -g animation.gif
+pyimg2six.py -E fast --colors 64 -g animation.gif
 ```
 
 **高质量静态图（质量优先）：**
 ```bash
-pysixel.py -q high -r lanczos3 --colors 256 --dither -o output.six photo.png
+pyimg2six.py -q high -r lanczos3 --colors 256 --dither -o output.six photo.png
 ```
 
 **大图快速预览：**
 ```bash
-pysixel.py -w 400 --colors 32 -E fast photo.png
+pyimg2six.py -w 400 --colors 32 -E fast photo.png
 ```
 
 **tmux 环境：**
 ```bash
-pysixel.py -P photo.png
+pyimg2six.py -P photo.png
 ```
 
 ---
@@ -462,3 +462,47 @@ pysixel.py -P photo.png
 5. **输出体积影响终端渲染**：RLE 压缩不仅减少存储，更直接影响终端渲染速度。880KB -> 71KB 的差异在终端中是卡顿与流畅的区别。
 
 6. **调色板大小是质量/速度的旋钮**：32 色提速 2.8x 但有色带；256 色质量好但慢。`--dither` 选项让用户自行选择。
+
+---
+
+## 12. pysix2png 解码器架构
+
+pysix2png.py 是 Sixel → PNG 的解码器，对应 libsixel 的 `sixel2png` 工具。其实现基于 libsixel 1.8.7 的 `fromsixel.c` 状态机。
+
+### 12.1 状态机设计
+
+解码器采用 7 状态有限状态机，与 libsixel 的实现一一对应：
+
+| 状态 | 常量 | 说明 |
+|------|------|------|
+| `PS_GROUND` | 0 | 初始/空闲状态 |
+| `PS_ESC` | 1 | ESC 转义序列 |
+| `PS_DCS` | 2 | DCS 设备控制字符串 |
+| `PS_DECSIXEL` | 3 | Sixel 数据（主解码状态） |
+| `PS_DECGRA` | 4 | 光栅属性 `"Pan;Pad;Ph;Pv` |
+| `PS_DECGRI` | 5 | 重复引入符 `!Pn` |
+| `PS_DECGCI` | 6 | 颜色引入符 `#Pc;Pu;Px;Py;Pz` |
+
+### 12.2 数据结构
+
+- **`_ImageBuffer`** — 像素缓冲区，存储调色板索引，支持动态扩展
+- **`_ParserContext`** — 解析器上下文，包含状态机状态、光标位置、颜色索引、参数缓冲区
+- **调色板** — 256 色，预初始化 16 色默认表 + 6x6x6 色立方体 + 24 级灰度
+
+### 12.3 颜色空间
+
+支持两种颜色定义模式：
+- **RGB 模式**（`Pu=2`）：`#N;2;R%;G%;B%`，值域 0-100
+- **HLS 模式**（`Pu=1`）：`#N;1;H%;L%;S%`，色相 0-360，亮度/饱和度 0-100
+
+HLS → RGB 转换复刻了 libsixel 的 `hls_to_rgb()` 函数，包括 Sixel 色环的 -120 度旋转偏移。
+
+### 12.4 与编码器的关系
+
+pysix2png 解码器与 pyimg2six 编码器互为逆操作：
+
+```
+图片文件 ──[pyimg2six]──> Sixel 数据 ──[pysix2png]──> PNG 文件
+```
+
+编码器将量化后的调色板索引数组编码为 Sixel 字符串；解码器将 Sixel 字符串还原为调色板索引数组，再通过 PIL 转换为 PNG。

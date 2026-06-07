@@ -367,6 +367,8 @@ if (!filter_get(srow, pen, i / FILTER_BANK_WIDTH)) {
 | RLE 压缩 | libsixel | 已应用 — 短 run 用 `.tobytes()` 替代逐字节 append，输出减少 92% |
 | Bayer 有序抖动 | libsixel A-Dither | 已应用 — `--dither` 选项减少 32 色色带伪影 |
 | MEDIANCUT 量化 | libsixel (via PIL) | 已应用 — PIL 内置的 MEDIANCUT 足够满足需求 |
+| Sixel 解码状态机 | libsixel fromsixel.c | 已应用 — pysix2png.py 复刻 7 状态机实现纯 Python Sixel 解码器 |
+| HLS 色彩空间 | libsixel hls_to_rgb() | 已应用 — pysix2png.py 支持 RGB 和 HLS 两种颜色定义模式 |
 
 ### 5.2 已尝试并回退的技术
 
