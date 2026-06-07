@@ -205,6 +205,21 @@ def _preprocess_frame(img, max_px_width=640, max_colors=256, dither="none",
     if dither == "fs":
         # Floyd-Steinberg: 先量化获取调色板，再误差扩散
         rgb_np = np.array(img.convert("RGB"), dtype=np.uint8)
+        # A1: 用 15-bit 哈希估算独特色数，若 ≤ max_colors 则跳过 FS
+        r16 = rgb_np[:, :, 0].astype(np.uint16)
+        g16 = rgb_np[:, :, 1].astype(np.uint16)
+        b16 = rgb_np[:, :, 2].astype(np.uint16)
+        hashes = (r16 >> 3) << 10 | (g16 >> 3) << 5 | (b16 >> 3)
+        unique_count = len(np.unique(hashes))
+        if unique_count <= max_colors:
+            # 原图颜色数不超过调色板，量化无损，跳过 FS
+            img = quantize(img, max_colors=max_colors, dither="none", quality=quality)
+            palette = img.getpalette()
+            w, h = img.size
+            num_colors = len(palette) // 3
+            palette_colors = np.array(palette[:num_colors * 3], dtype=np.uint8).reshape(num_colors, 3)
+            pixels_np = np.array(img, dtype=np.uint8)
+            return pixels_np, palette_colors, w, h
         quantized = quantize(img, max_colors=max_colors, dither="none", quality=quality)
         palette = quantized.getpalette()
         w, h = quantized.size
@@ -222,6 +237,16 @@ def _preprocess_frame(img, max_px_width=640, max_colors=256, dither="none",
         return pixels_np, palette_colors, w, h
 
 
+def _map_to_palette(rgb_np, palette_colors):
+    """将 RGB 像素映射到最近调色板色（numpy 向量化）。"""
+    h, w = rgb_np.shape[:2]
+    flat = rgb_np.reshape(-1, 3).astype(np.float32)
+    pal = palette_colors.astype(np.float32)
+    diff = flat[:, np.newaxis, :] - pal[np.newaxis, :, :]
+    dist = (diff * diff).sum(axis=2)
+    return dist.argmin(axis=1).reshape(h, w).astype(np.uint8)
+
+
 def _rle_encode(vals, gri_limit=False, encode_policy="auto"):
     """RLE 编码。vals: uint8 数组，值域 [0x3F, 0x7F]。
 
@@ -236,7 +261,7 @@ def _rle_encode(vals, gri_limit=False, encode_policy="auto"):
     if encode_policy == "fast":
         return vals.tobytes()
 
-    rle_threshold = 2 if encode_policy == "size" else 4
+    rle_threshold = 2 if encode_policy == "size" else 3
 
     diff = np.diff(vals)
     changes = np.nonzero(diff)[0] + 1
@@ -356,6 +381,7 @@ def get_gif_frames(path, max_px_width=640, max_colors=256, dither="none",
 
     prev_canvas = None
     canvas = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    cached_palette = None  # A2: 调色板缓存
 
     for i in range(n_frames):
         img.seek(i)
@@ -367,13 +393,39 @@ def get_gif_frames(path, max_px_width=640, max_colors=256, dither="none",
         frame = img.convert("RGBA")
         canvas.paste(frame, (0, 0), frame if frame.mode == "RGBA" else None)
 
-        pixels_np, palette_colors, w, h = _preprocess_frame(
-            canvas.copy(), max_px_width=max_px_width, max_colors=max_colors, dither=dither,
-            target_w=target_w, target_h=target_h, resample=resample,
-            crop=crop, monochrome=monochrome, bgcolor=bgcolor,
-            inverse=inverse, quality=quality, no_resize=no_resize
-        )
-        frame_arrays.append((pixels_np, palette_colors, w, h))
+        if cached_palette is not None and dither != "fs":
+            # A2: 复用调色板，跳过量化
+            frame_img = canvas.copy()
+            if crop:
+                frame_img = frame_img.crop(crop)
+            if bgcolor:
+                bg = Image.new("RGB", frame_img.size, bgcolor)
+                if frame_img.mode == "RGBA":
+                    bg.paste(frame_img, mask=frame_img.split()[3])
+                    frame_img = bg
+                else:
+                    frame_img = frame_img.convert("RGB")
+            if not no_resize:
+                frame_img = _resize_for_terminal(frame_img, max_px_width, target_w=target_w, target_h=target_h, resample=resample)
+            if monochrome:
+                frame_img = frame_img.convert("L")
+            if inverse:
+                from PIL import ImageOps
+                frame_img = ImageOps.invert(frame_img.convert("RGB"))
+            rgb_np = np.array(frame_img.convert("RGB"), dtype=np.uint8)
+            w, h = frame_img.size
+            pixels_np = _map_to_palette(rgb_np, cached_palette)
+            frame_arrays.append((pixels_np, cached_palette, w, h))
+        else:
+            pixels_np, palette_colors, w, h = _preprocess_frame(
+                canvas.copy(), max_px_width=max_px_width, max_colors=max_colors, dither=dither,
+                target_w=target_w, target_h=target_h, resample=resample,
+                crop=crop, monochrome=monochrome, bgcolor=bgcolor,
+                inverse=inverse, quality=quality, no_resize=no_resize
+            )
+            if cached_palette is None:
+                cached_palette = palette_colors
+            frame_arrays.append((pixels_np, palette_colors, w, h))
 
         if disposal == 2:
             canvas = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
