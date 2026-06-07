@@ -42,8 +42,8 @@ def _get_terminal_columns():
         return 80
 
 
-def quantize(img, max_colors=256, dither=False):
-    """将图片量化为有限调色板。可选 Bayer 有序抖动。"""
+def quantize(img, max_colors=256, dither=False, quality="auto"):
+    """将图片量化为有限调色板。可选 Bayer 有序抖动。quality 控制量化质量。"""
     rgb = img.convert("RGB")
     if dither:
         arr = np.array(rgb, dtype=np.float32)
@@ -55,7 +55,10 @@ def quantize(img, max_colors=256, dither=False):
         arr += bayer[:, :, np.newaxis] * amplitude
         arr = np.clip(arr, 0, 255).astype(np.uint8)
         rgb = Image.fromarray(arr)
-    return rgb.quantize(max_colors, method=Image.Quantize.MEDIANCUT)
+    method = Image.Quantize.MEDIANCUT
+    if quality == "high":
+        method = Image.Quantize.FASTOCTREE
+    return rgb.quantize(max_colors, method=method)
 
 
 _RESAMPLE_FILTERS = {
@@ -119,7 +122,8 @@ def _resize_for_terminal(img, max_px_width, target_w=None, target_h=None, resamp
 
 def _preprocess_frame(img, max_px_width=640, max_colors=256, dither=False,
                       target_w=None, target_h=None, resample="bilinear",
-                      crop=None, monochrome=False, bgcolor=None):
+                      crop=None, monochrome=False, bgcolor=None,
+                      inverse=False, quality="auto"):
     """预处理一帧：crop → resize → monochrome/bgcolor → quantize → numpy。"""
     if crop:
         img = img.crop(crop)
@@ -133,7 +137,10 @@ def _preprocess_frame(img, max_px_width=640, max_colors=256, dither=False,
     img = _resize_for_terminal(img, max_px_width, target_w=target_w, target_h=target_h, resample=resample)
     if monochrome:
         img = img.convert("L")
-    img = quantize(img, max_colors=max_colors, dither=dither)
+    if inverse:
+        from PIL import ImageOps
+        img = ImageOps.invert(img.convert("RGB"))
+    img = quantize(img, max_colors=max_colors, dither=dither, quality=quality)
     palette = img.getpalette()
     w, h = img.size
     num_colors = len(palette) // 3
@@ -142,14 +149,21 @@ def _preprocess_frame(img, max_px_width=640, max_colors=256, dither=False,
     return pixels_np, palette_colors, w, h
 
 
-def _rle_encode(vals, gri_limit=False):
+def _rle_encode(vals, gri_limit=False, encode_policy="auto"):
     """RLE 编码。vals: uint8 数组，值域 [0x3F, 0x7F]。
 
-    gri_limit=True 时限制 RLE 参数 ≤ 255（VT240 兼容）。
+    gri_limit=True  限制 RLE 参数 ≤ 255（VT240 兼容）。
+    encode_policy: "auto" / "fast" (跳过RLE) / "size" (阈值=2)
     """
     n = len(vals)
     if n == 0:
         return b""
+
+    # fast 模式：跳过 RLE，直接返回原始字节
+    if encode_policy == "fast":
+        return vals.tobytes()
+
+    rle_threshold = 2 if encode_policy == "size" else 4
 
     diff = np.diff(vals)
     changes = np.nonzero(diff)[0] + 1
@@ -166,9 +180,8 @@ def _rle_encode(vals, gri_limit=False):
         start = boundaries[i]
         run = boundaries[i + 1] - start
         v = int(vals[start])
-        if run >= 4:
+        if run >= rle_threshold:
             if gri_limit:
-                # VT240 兼容：拆分为多段 ≤ 255
                 while run > 0:
                     chunk = min(run, 255)
                     extend(b"!")
@@ -184,16 +197,25 @@ def _rle_encode(vals, gri_limit=False):
     return bytes(out)
 
 
-def encode_sixel(pixels_np, palette_colors, w, h, eight_bit=False, gri_limit=False):
+def encode_sixel(pixels_np, palette_colors, w, h, eight_bit=False, gri_limit=False,
+                 encode_policy="auto", passthrough=False):
     """将 numpy 像素数组编码为 Sixel 字符串。
 
-    eight_bit=True  使用 8bit DCS (0x90 / 0x9C)
-    gri_limit=True  限制 GRI 参数 ≤ 255
+    eight_bit=True      使用 8bit DCS (0x90 / 0x9C)
+    gri_limit=True      限制 GRI 参数 ≤ 255
+    encode_policy       "auto" / "fast" / "size"
+    passthrough=True    包裹 tmux/screen 穿透序列
     """
     used_colors = np.unique(pixels_np)
     sixel_bands = (h + 5) // 6
 
     parts = bytearray()
+
+    # tmux/screen 穿透头
+    if passthrough:
+        parts.extend(b"\x1bPtmux;")
+        parts.extend(b"\x1b\\")
+
     # DCS 头
     if eight_bit:
         parts.extend(b"\x900;0;0q")
@@ -223,7 +245,7 @@ def encode_sixel(pixels_np, palette_colors, w, h, eight_bit=False, gri_limit=Fal
         for ci in range(n_colors):
             cidx = int(band_colors[ci])
             parts.extend(_COLOR_STR[cidx])
-            parts.extend(_rle_encode(bits_all[ci] + 0x3F, gri_limit=gri_limit))
+            parts.extend(_rle_encode(bits_all[ci] + 0x3F, gri_limit=gri_limit, encode_policy=encode_policy))
             parts.append(0x24)
 
         if parts[-1] == 0x24:
@@ -237,12 +259,17 @@ def encode_sixel(pixels_np, palette_colors, w, h, eight_bit=False, gri_limit=Fal
     else:
         parts.extend(b"\x1b\\")
 
+    # tmux/screen 穿透尾
+    if passthrough:
+        parts.extend(b"\x1b\\")
+
     return bytes(parts), sixel_bands
 
 
 def get_gif_frames(path, max_px_width=640, max_colors=256, dither=False,
                    target_w=None, target_h=None, resample="bilinear",
-                   crop=None, monochrome=False, bgcolor=None):
+                   crop=None, monochrome=False, bgcolor=None,
+                   inverse=False, quality="auto"):
     """提取 GIF 所有帧，返回 (帧列表, 延迟列表) 或 (None, None)。"""
     img = Image.open(path)
     if not getattr(img, "is_animated", False) or img.n_frames <= 1:
@@ -269,7 +296,8 @@ def get_gif_frames(path, max_px_width=640, max_colors=256, dither=False,
         pixels_np, palette_colors, w, h = _preprocess_frame(
             canvas.copy(), max_px_width=max_px_width, max_colors=max_colors, dither=dither,
             target_w=target_w, target_h=target_h, resample=resample,
-            crop=crop, monochrome=monochrome, bgcolor=bgcolor
+            crop=crop, monochrome=monochrome, bgcolor=bgcolor,
+            inverse=inverse, quality=quality
         )
         frame_arrays.append((pixels_np, palette_colors, w, h))
 
@@ -305,12 +333,15 @@ def play_gif(path, max_px_width=640, max_colors=256, dither=False,
              output_file=None, loopmode="auto", eight_bit=False,
              gri_limit=False, ignore_delay=False,
              target_w=None, target_h=None, resample="bilinear",
-             crop=None, monochrome=False, bgcolor=None):
+             crop=None, monochrome=False, bgcolor=None,
+             inverse=False, quality="auto", encode_policy="auto",
+             passthrough=False):
     """在终端中播放 GIF 动画（流式编码 + 帧间差分）。"""
     frame_arrays, delays = get_gif_frames(
         path, max_px_width=max_px_width, max_colors=max_colors, dither=dither,
         target_w=target_w, target_h=target_h, resample=resample,
-        crop=crop, monochrome=monochrome, bgcolor=bgcolor
+        crop=crop, monochrome=monochrome, bgcolor=bgcolor,
+        inverse=inverse, quality=quality
     )
     if frame_arrays is None:
         return False
@@ -349,7 +380,8 @@ def play_gif(path, max_px_width=640, max_colors=256, dither=False,
                 t_frame = time.perf_counter()
                 sixel_data, num_bands = encode_sixel(
                     pixels_np, palette_colors, w, h,
-                    eight_bit=eight_bit, gri_limit=gri_limit
+                    eight_bit=eight_bit, gri_limit=gri_limit,
+                    encode_policy=encode_policy, passthrough=passthrough
                 )
 
                 if not first:
@@ -384,17 +416,21 @@ def play_gif(path, max_px_width=640, max_colors=256, dither=False,
 def show_static(path, max_px_width=640, max_colors=256, dither=False,
                 output_file=None, eight_bit=False, gri_limit=False,
                 target_w=None, target_h=None, resample="bilinear",
-                crop=None, monochrome=False, bgcolor=None):
+                crop=None, monochrome=False, bgcolor=None,
+                inverse=False, quality="auto", encode_policy="auto",
+                passthrough=False):
     """显示静态图片。"""
     img = Image.open(path)
     pixels_np, palette_colors, w, h = _preprocess_frame(
         img, max_px_width=max_px_width, max_colors=max_colors, dither=dither,
         target_w=target_w, target_h=target_h, resample=resample,
-        crop=crop, monochrome=monochrome, bgcolor=bgcolor
+        crop=crop, monochrome=monochrome, bgcolor=bgcolor,
+        inverse=inverse, quality=quality
     )
     sixel_data, _ = encode_sixel(
         pixels_np, palette_colors, w, h,
-        eight_bit=eight_bit, gri_limit=gri_limit
+        eight_bit=eight_bit, gri_limit=gri_limit,
+        encode_policy=encode_policy, passthrough=passthrough
     )
     print(
         f"[{path.name}] {img.size[0]}x{img.size[1]} -> Sixel ({len(sixel_data)} bytes, {max_colors} colors)",
@@ -443,6 +479,16 @@ def main():
     parser.add_argument("-c", "--crop", metavar="WxH+X+Y", help="裁剪区域 (如 100x100+10+10)")
     parser.add_argument("-e", "--monochrome", action="store_true", help="单色模式 (灰度)")
     parser.add_argument("-B", "--bgcolor", metavar="COLOR", help="背景色 (如 #ffffff)")
+    # 批次 3 参数
+    parser.add_argument("-E", "--encode", default="auto",
+                        choices=["auto", "fast", "size"],
+                        help="编码策略: auto(默认) / fast(跳过RLE) / size(更小体积)")
+    parser.add_argument("-q", "--quality", default="auto",
+                        choices=["auto", "low", "high", "full"],
+                        help="量化质量: auto(默认) / low(快) / high / full(最佳)")
+    parser.add_argument("-P", "--passthrough", action="store_true",
+                        help="tmux/screen 穿透模式")
+    parser.add_argument("-i", "--inverse", action="store_true", help="反转颜色 (底片效果)")
 
     args = parser.parse_args()
 
@@ -465,6 +511,8 @@ def main():
         output_file=args.output, eight_bit=eight_bit, gri_limit=gri_limit,
         target_w=args.width, target_h=args.height, resample=args.resample,
         crop=crop_box, monochrome=args.monochrome, bgcolor=bgcolor_rgb,
+        inverse=args.inverse, quality=args.quality, encode_policy=args.encode,
+        passthrough=args.passthrough,
     )
 
     if not args.no_anim:
