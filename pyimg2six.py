@@ -58,6 +58,13 @@ def quantize(img, max_colors=256, dither="none", quality="auto"):
     method = Image.Quantize.MEDIANCUT
     if quality == "high":
         method = Image.Quantize.FASTOCTREE
+    # B3: 大图采样量化 — 像素数 > 1M 时下采样到 ~1000px 宽度
+    w, h = rgb.size
+    if w * h > 1_000_000:
+        sample_w = 1000
+        sample_h = max(1, int(h * sample_w / w))
+        rgb_small = rgb.resize((sample_w, sample_h), Image.Resampling.BILINEAR)
+        return rgb_small.quantize(max_colors, method=method)
     return rgb.quantize(max_colors, method=method)
 
 
@@ -66,6 +73,8 @@ def _floyd_steinberg(rgb_np, palette_colors, w, h):
 
     对量化后的像素进行误差扩散：对每个像素找最近调色板色，
     计算量化误差，按 FS 权重传播到相邻像素。
+
+    B1+B2: 使用 15-bit 哈希缓存实现 O(1) 摊还颜色查找。
 
     权重分布:
               curr    7/16
@@ -77,6 +86,9 @@ def _floyd_steinberg(rgb_np, palette_colors, w, h):
     err = rgb_np.astype(np.float32).reshape(h, w, 3)
     out = np.empty((h, w), dtype=np.uint8)
 
+    # B2: 15-bit 哈希缓存 (0=未缓存, value+1=缓存的调色板索引)
+    cachetable = np.zeros(32768, dtype=np.int16)
+
     for y in range(h):
         for x in range(w):
             r, g, b = err[y, x, 0], err[y, x, 1], err[y, x, 2]
@@ -85,12 +97,19 @@ def _floyd_steinberg(rgb_np, palette_colors, w, h):
             g = max(0.0, min(255.0, g))
             b = max(0.0, min(255.0, b))
 
-            # 找最近调色板色
-            dr = pal[:, 0] - r
-            dg = pal[:, 1] - g
-            db = pal[:, 2] - b
-            dist = dr * dr + dg * dg + db * db
-            best = int(np.argmin(dist))
+            # B2: 15-bit 哈希查找
+            hash_idx = (int(r) >> 3) << 10 | (int(g) >> 3) << 5 | (int(b) >> 3)
+            cached = cachetable[hash_idx]
+            if cached:
+                best = int(cached - 1)
+            else:
+                dr = pal[:, 0] - r
+                dg = pal[:, 1] - g
+                db = pal[:, 2] - b
+                dist = dr * dr + dg * dg + db * db
+                best = int(np.argmin(dist))
+                cachetable[hash_idx] = best + 1
+
             out[y, x] = best
 
             # 量化误差
@@ -205,6 +224,7 @@ def _preprocess_frame(img, max_px_width=640, max_colors=256, dither="none",
     if dither == "fs":
         # Floyd-Steinberg: 先量化获取调色板，再误差扩散
         rgb_np = np.array(img.convert("RGB"), dtype=np.uint8)
+        h, w = rgb_np.shape[:2]
         # A1: 用 15-bit 哈希估算独特色数，若 ≤ max_colors 则跳过 FS
         r16 = rgb_np[:, :, 0].astype(np.uint16)
         g16 = rgb_np[:, :, 1].astype(np.uint16)
@@ -215,16 +235,16 @@ def _preprocess_frame(img, max_px_width=640, max_colors=256, dither="none",
             # 原图颜色数不超过调色板，量化无损，跳过 FS
             img = quantize(img, max_colors=max_colors, dither="none", quality=quality)
             palette = img.getpalette()
-            w, h = img.size
             num_colors = len(palette) // 3
             palette_colors = np.array(palette[:num_colors * 3], dtype=np.uint8).reshape(num_colors, 3)
             pixels_np = np.array(img, dtype=np.uint8)
-            return pixels_np, palette_colors, w, h
+            return pixels_np, palette_colors, img.size[0], img.size[1]
+        # B3: quantize() 内部对大图自动采样，返回的调色板适用于全图
         quantized = quantize(img, max_colors=max_colors, dither="none", quality=quality)
         palette = quantized.getpalette()
-        w, h = quantized.size
         num_colors = len(palette) // 3
         palette_colors = np.array(palette[:num_colors * 3], dtype=np.uint8).reshape(num_colors, 3)
+        # FS 在原图尺寸上运行（w, h 来自 rgb_np）
         pixels_np = _floyd_steinberg(rgb_np, palette_colors, w, h)
         return pixels_np, palette_colors, w, h
     else:
