@@ -1,0 +1,95 @@
+"""sixview — 自适应 Sixel 文件查看器
+
+自动检测终端宽度，超宽图像缩放后输出，未超宽直接输出。
+用法:
+    sixview.py input.six
+    sixview.py -w 800 input.six
+"""
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+from pysix2png import _sixel_decode_raw, SIXEL_PALETTE_MAX
+from pyimg2six import encode_sixel, _resize_for_terminal, quantize, _get_terminal_columns
+
+
+def _parse_raster_width(data, head_bytes=512):
+    """快速解析 Sixel 光栅属性中的图像宽度，仅读文件头。"""
+    head = data[:head_bytes]
+    m = re.search(rb'"(\d+);(\d+);(\d+);(\d+)', head)
+    if m:
+        return int(m.group(3))
+    return None
+
+
+def _decode_to_image(sixel_data):
+    """将 Sixel 字节数据解码为 PIL RGB Image。"""
+    pixels, width, height, palette, ncolors = _sixel_decode_raw(sixel_data)
+    img = Image.frombytes('P', (width, height), bytes(pixels))
+    pal_data = bytearray()
+    for i in range(SIXEL_PALETTE_MAX):
+        rgb = palette[i]
+        pal_data.append((rgb >> 16) & 0xFF)
+        pal_data.append((rgb >> 8) & 0xFF)
+        pal_data.append(rgb & 0xFF)
+    img.putpalette(bytes(pal_data))
+    return img.convert('RGB')
+
+
+def _encode_image(img, max_px_width):
+    """将 PIL Image 编码为 Sixel 字节（缩放 + 量化 + 编码）。"""
+    img = _resize_for_terminal(img, max_px_width)
+    quantized = quantize(img, max_colors=256, dither="none", quality="auto")
+    palette = quantized.getpalette()
+    w, h = quantized.size
+    num_colors = len(palette) // 3
+    palette_colors = np.array(palette[:num_colors * 3], dtype=np.uint8).reshape(num_colors, 3)
+    pixels_np = np.array(quantized, dtype=np.uint8)
+    sixel_data, _ = encode_sixel(pixels_np, palette_colors, w, h)
+    return sixel_data
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="sixview",
+        description="自适应 Sixel 文件查看器 — 超宽图像自动缩放",
+    )
+    parser.add_argument("input", help="Sixel 文件路径")
+    parser.add_argument("-w", "--width", type=int, metavar="PX",
+                        help="最大像素宽度（默认终端宽度 × 8）")
+    args = parser.parse_args()
+
+    path = Path(args.input)
+    if not path.exists():
+        print(f"文件不存在: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    data = path.read_bytes()
+    if not data:
+        sys.exit(0)
+
+    terminal_cols = _get_terminal_columns()
+    max_px_width = args.width if args.width else terminal_cols * 8
+
+    # 快速解析图像宽度
+    img_width = _parse_raster_width(data)
+
+    if img_width is not None and img_width <= max_px_width:
+        # 未超宽，直接输出
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+    else:
+        # 超宽或无法解析宽度，解码→缩放→重编码
+        img = _decode_to_image(data)
+        sixel_data = _encode_image(img, max_px_width)
+        sys.stdout.buffer.write(sixel_data)
+        sys.stdout.buffer.flush()
+
+
+if __name__ == "__main__":
+    main()

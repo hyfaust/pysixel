@@ -6,7 +6,7 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Python Sixel toolkit — two command-line tools for encoding and decoding Sixel graphics, inspired by libsixel's `img2sixel` and `sixel2png`.
+Python Sixel toolkit — encoding, decoding, and viewing tools for Sixel graphics, inspired by libsixel's `img2sixel` and `sixel2png`.
 
 ## Table of Contents
 
@@ -21,6 +21,7 @@ Python Sixel toolkit — two command-line tools for encoding and decoding Sixel 
   - [Features](#features-1)
   - [Quick Start](#quick-start-1)
   - [Command-Line Reference](#command-line-reference-1)
+- [sixview — Adaptive Viewer](#sixview--adaptive-viewer)
 - [Performance](#performance)
 - [Project Structure](#project-structure)
 - [Technical Documentation](#technical-documentation)
@@ -34,6 +35,7 @@ Python Sixel toolkit — two command-line tools for encoding and decoding Sixel 
 |------|-------------|---------------------|
 | `pyimg2six.py` | Image → Sixel encoder & terminal viewer | `img2sixel` |
 | `pysix2png.py` | Sixel → PNG decoder | `sixel2png` |
+| `sixview.py` | Adaptive Sixel viewer — auto-scales wide images to terminal width | -- |
 
 ## Prerequisites
 
@@ -183,6 +185,25 @@ python pysix2png.py -V
 
 ---
 
+## sixview — Adaptive Viewer
+
+Auto-detects terminal width, scales wide Sixel images to fit, passes through narrow ones unchanged.
+
+```bash
+# View a .six file (auto-scales if wider than terminal)
+python sixview.py image.six
+
+# Specify max pixel width manually
+python sixview.py -w 800 image.six
+```
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `input` | Sixel file path (positional) | required |
+| `-w PX` | Max pixel width | terminal columns × 8 |
+
+---
+
 ## Performance
 
 Benchmarked on a 500x500 GIF with 33 frames (target frame delay: 30ms/frame).
@@ -219,6 +240,7 @@ Benchmarked on a 500x500 GIF with 33 frames (target frame delay: 30ms/frame).
 pysixel/
 ├── pyimg2six.py               # Image → Sixel encoder (img2sixel equivalent)
 ├── pysix2png.py               # Sixel → PNG decoder (sixel2png equivalent)
+├── sixview.py                 # Adaptive Sixel viewer (auto-scale to terminal)
 ├── README.md                  # English documentation
 ├── README_zh.md               # Chinese documentation
 ├── docs/                      # Technical documentation

@@ -6,7 +6,7 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Python Sixel 工具集 — 两个命令行工具，用于 Sixel 图形的编码和解码，灵感来自 libsixel 的 `img2sixel` 和 `sixel2png`。
+Python Sixel 工具集 — Sixel 图形的编码、解码和自适应查看，灵感来自 libsixel 的 `img2sixel` 和 `sixel2png`。
 
 ## 目录
 
@@ -21,6 +21,7 @@ Python Sixel 工具集 — 两个命令行工具，用于 Sixel 图形的编码�
   - [特性](#特性-1)
   - [快速开始](#快速开始-1)
   - [命令行参数一览](#命令行参数一览-1)
+- [sixview — 自适应查看器](#sixview--自适应查看器)
 - [性能](#性能)
 - [项目结构](#项目结构)
 - [技术文档](#技术文档)
@@ -34,6 +35,7 @@ Python Sixel 工具集 — 两个命令行工具，用于 Sixel 图形的编码�
 |------|------|---------------|
 | `pyimg2six.py` | 图片 → Sixel 编码器 & 终端查看器 | `img2sixel` |
 | `pysix2png.py` | Sixel → PNG 解码器 | `sixel2png` |
+| `sixview.py` | 自适应 Sixel 查看器 — 超宽图像自动缩放至终端宽度 | -- |
 
 ## 环境要求
 
@@ -183,6 +185,25 @@ python pysix2png.py -V
 
 ---
 
+## sixview — 自适应查看器
+
+自动检测终端宽度，超宽 Sixel 图像缩放后输出，未超宽直接输出。
+
+```bash
+# 查看 .six 文件（超宽时自动缩放）
+python sixview.py image.six
+
+# 手动指定最大像素宽度
+python sixview.py -w 800 image.six
+```
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `input` | Sixel 文件路径（位置参数） | 必填 |
+| `-w PX` | 最大像素宽度 | 终端列数 × 8 |
+
+---
+
 ## 性能
 
 基准测试条件：500x500 GIF，33 帧，目标帧延迟 30ms/帧。
@@ -219,6 +240,7 @@ python pysix2png.py -V
 pysixel/
 ├── pyimg2six.py               # 图片→Sixel 编码器（img2sixel 等价）
 ├── pysix2png.py               # Sixel→PNG 解码器（sixel2png 等价）
+├── sixview.py                 # 自适应 Sixel 查看器（自动缩放至终端宽度）
 ├── README.md                  # 英文文档
 ├── README_zh.md               # 中文文档
 ├── docs/                      # 技术文档
