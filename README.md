@@ -73,8 +73,10 @@ pip install -r requirements.txt
 - **Numpy vectorized encoding** — 13x speedup over naive Python by replacing per-pixel access with array operations
 - **Real-time GIF playback** — Streaming per-frame encode with adaptive delay, achieving 33ms/frame for 500x500 GIFs
 - **RLE compression** — 12x output size reduction via Sixel Run-Length Encoding
-- **Dithering modes** — Bayer 8x8 ordered dithering and Floyd-Steinberg error diffusion (`-d bayer` / `-d fs`)
+- **Dithering modes** — Bayer 8x8 ordered dithering and Floyd-Steinberg error diffusion with 15-bit hash cache (`-d bayer` / `-d fs`)
+- **Raster attributes** — `"1;1;W;H` pixel aspect ratio for correct terminal rendering without height distortion
 - **Original resolution** — `--no-resize` flag to keep image at native pixel dimensions
+- **Smart optimizations** — Auto-disable FS for low-color images, GIF palette caching, sampling quantization for large images
 - **Zero GPU dependency** — Pure CPU-based encoding using numpy
 
 ### Quick Start
@@ -203,8 +205,13 @@ Benchmarked on a 500x500 GIF with 33 frames (target frame delay: 30ms/frame).
 | Streaming encode | 3x (cumulative) | Per-frame encode + release, avoid GC degradation |
 | Color reduction (256 to 32) | 2.8x | Fewer colors = fewer iterations per band |
 | Batch color computation | 1.2x | Numpy broadcasting for all colors at once |
-| RLE compression | Output -92% | DEC VT Sixel `!COUNT CHAR` |
+| RLE compression | Output -92% | DEC VT Sixel `!COUNT CHAR` (threshold=3) |
 | String caching | 1.1x | Pre-built encoded strings for colors and run lengths |
+| Raster attributes | Correct ratio | `"1;1;W;H` eliminates need for char_aspect hack |
+| FS hash cache | O(1) lookup | 15-bit cachetable for Floyd-Steinberg color matching |
+| Auto-disable FS | Skip when lossless | 15-bit hash detects low-color images, skips diffusion |
+| GIF palette cache | Skip re-quantize | Reuse first frame's palette for subsequent frames |
+| Sampling quantization | Large image speed | Downsample for MEDIANCUT when pixels > 1M |
 
 ## Project Structure
 

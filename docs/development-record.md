@@ -720,3 +720,39 @@ stdout.buffer.write() → 终端渲染
 - 支持光栅属性（Pan/Pad/Ph/Pv）和重复引入符（`!Pn`）
 - 256 色调色板，预初始化 16 色默认表 + 6x6x6 色立方体 + 24 级灰度
 - 支持文件和标准输入/输出，管道友好
+
+---
+
+## 18. 光栅属性修复
+
+### 18.1 问题
+
+早期版本的 DCS 头为 `ESC P 0;0;0q`，没有光栅属性。终端按默认字符单元格比例渲染，导致图像垂直拉伸约 2 倍。旧方案是 `char_aspect = 0.5` 预压缩高度。
+
+### 18.2 修复
+
+在 DCS 头后添加光栅属性 `"1;1;W;H`（Pan=1, Pad=1, Ph=W, Pv=H），与 libsixel img2sixel 和 sixel-web 编码器一致。同时移除 `char_aspect = 0.5` hack。
+
+---
+
+## 19. libsixel 移植优化
+
+### 19.1 A 类优化（高收益低难度）
+
+- **A1 自动禁用 FS**：用 15-bit 哈希估算原图独特色数，≤ max_colors 时跳过 Floyd-Steinberg 扩散
+- **A2 GIF 调色板缓存**：第一帧保存调色板，后续帧复用跳过 `quantize()`，用 `_map_to_palette()` 做最近色映射
+- **A3 RLE 阈值 4→3**：与 libsixel 对齐
+
+### 19.2 B 类优化（中收益中难度）
+
+- **B1+B2 FS 哈希缓存**：`cachetable[32768]` 15-bit 哈希缓存，每个像素先查缓存（O(1)），未命中再算 `np.argmin` 并回填。与 libsixel 的 `lookup_fast()` 策略一致
+- **B3 采样量化**：像素数 > 1M 时下采样到 ~1000px 宽度做 MEDIANCUT 获取调色板，再将调色板应用于全图
+
+### 19.3 抖动模式重构
+
+`--dither` 从布尔标志改为 `-d {none,bayer,fs}` 三选一。新增 Floyd-Steinberg 误差扩散模式，实现参考 sixel-web 的 `applyFloydSteinberg()` 和 libsixel 的 `diffuse_fs()`。
+
+
+## 20. --no-resize 选项
+
+新增 `--no-resize` 标志，跳过 `_resize_for_terminal()` 缩放步骤，图片以原始像素尺寸编码。适用于需要完整分辨率输出的场景（如打印、存档、超宽终端）。

@@ -73,8 +73,10 @@ pip install -r requirements.txt
 - **numpy 向量化编码** — 用数组操作替代逐像素访问，相比朴素 Python 实现提速 13 倍
 - **实时 GIF 播放** — 流式逐帧编码 + 自适应延迟，500x500 GIF 实现 33ms/帧
 - **RLE 压缩** — 通过 Sixel 游程编码实现 12 倍输出体积压缩
-- **抖动模式** — Bayer 8x8 有序抖动和 Floyd-Steinberg 误差扩散（`-d bayer` / `-d fs`）
+- **抖动模式** — Bayer 8x8 有序抖动和 Floyd-Steinberg 误差扩散，FS 内置 15-bit 哈希缓存（`-d bayer` / `-d fs`）
+- **光栅属性** — 输出 `"1;1;W;H` 像素宽高比，终端正确渲染无需高度压缩
 - **保持原始分辨率** — `--no-resize` 选项，不缩放图片
+- **智能优化** — 低色图自动跳过 FS、GIF 调色板缓存、大图采样量化
 - **零 GPU 依赖** — 纯 CPU 编码，基于 numpy 加速
 
 ### 快速开始
@@ -203,8 +205,13 @@ python pysix2png.py -V
 | 流式编码 | 3 倍（累积） | 逐帧编码+释放，避免 GC 退化 |
 | 减色 256 到 32 | 2.8 倍 | 更少颜色 = 每 band 更少迭代 |
 | 批量颜色计算 | 1.2 倍 | numpy broadcasting 一次计算所有颜色 |
-| RLE 压缩 | 输出减少 92% | DEC VT Sixel `!COUNT CHAR` |
+| RLE 压缩 | 输出减少 92% | DEC VT Sixel `!COUNT CHAR`（阈值=3） |
 | 字符串缓存 | 1.1 倍 | 预构建颜色和长度的编码字符串 |
+| 光栅属性 | 正确宽高比 | `"1;1;W;H` 消除 char_aspect hack |
+| FS 哈希缓存 | O(1) 查找 | 15-bit cachetable 加速 Floyd-Steinberg 颜色匹配 |
+| 自动禁用 FS | 无损时跳过 | 15-bit 哈希检测低色图，跳过误差扩散 |
+| GIF 调色板缓存 | 跳过重复量化 | 后续帧复用第一帧调色板 |
+| 采样量化 | 大图加速 | 像素数 > 1M 时下采样做 MEDIANCUT |
 
 ## 项目结构
 
