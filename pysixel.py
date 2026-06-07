@@ -8,6 +8,8 @@
 - 自适应延迟: 编码耗时从 sleep 中扣除
 - 有序抖动: Bayer 8x8 矩阵减少色带 (可选)
 """
+import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -15,15 +17,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-MAX_WIDTH = 80
-MAX_PX_WIDTH = MAX_WIDTH * 8
-
 _SIXEL_WEIGHTS = np.array([1, 2, 4, 8, 16, 32], dtype=np.uint8).reshape(6, 1)
 
 _COLOR_STR = [f"#{i}".encode("ascii") for i in range(256)]
-_RUN_STR = [str(i).encode("ascii") for i in range(MAX_PX_WIDTH + 1)]
-
-DEFAULT_COLORS = 32
+_RUN_STR = [str(i).encode("ascii") for i in range(4096)]
 
 _BAYER8 = np.array([
     [ 0, 32,  8, 40,  2, 34, 10, 42],
@@ -37,7 +34,15 @@ _BAYER8 = np.array([
 ], dtype=np.float32) / 64.0 - 0.5
 
 
-def quantize(img, max_colors=DEFAULT_COLORS, dither=False):
+def _get_terminal_columns():
+    """获取终端列数，失败时返回 80。"""
+    try:
+        return os.get_terminal_size().columns
+    except (ValueError, OSError):
+        return 80
+
+
+def quantize(img, max_colors=256, dither=False):
     """将图片量化为有限调色板。可选 Bayer 有序抖动。"""
     rgb = img.convert("RGB")
     if dither:
@@ -53,20 +58,21 @@ def quantize(img, max_colors=DEFAULT_COLORS, dither=False):
     return rgb.quantize(max_colors, method=Image.Quantize.MEDIANCUT)
 
 
-def _resize_for_terminal(img):
+def _resize_for_terminal(img, max_px_width):
+    """缩放图片以适应终端宽度，补偿字符宽高比。"""
     w, h = img.size
     char_aspect = 0.5
-    if w > MAX_PX_WIDTH:
-        ratio = MAX_PX_WIDTH / w
-        w, h = MAX_PX_WIDTH, int(h * ratio)
+    if w > max_px_width:
+        ratio = max_px_width / w
+        w, h = max_px_width, int(h * ratio)
     h = int(h * char_aspect)
     return img.resize((w, h), Image.Resampling.LANCZOS)
 
 
-def _preprocess_frame(img, dither=False):
+def _preprocess_frame(img, max_px_width=640, max_colors=256, dither=False):
     """预处理一帧：resize → quantize → numpy array + palette。"""
-    img = _resize_for_terminal(img)
-    img = quantize(img, dither=dither)
+    img = _resize_for_terminal(img, max_px_width)
+    img = quantize(img, max_colors=max_colors, dither=dither)
     palette = img.getpalette()
     w, h = img.size
     num_colors = len(palette) // 3
@@ -75,8 +81,11 @@ def _preprocess_frame(img, dither=False):
     return pixels_np, palette_colors, w, h
 
 
-def _rle_encode(vals):
-    """RLE 编码。vals: uint8 数组，值域 [0x3F, 0x7F]。"""
+def _rle_encode(vals, gri_limit=False):
+    """RLE 编码。vals: uint8 数组，值域 [0x3F, 0x7F]。
+
+    gri_limit=True 时限制 RLE 参数 ≤ 255（VT240 兼容）。
+    """
     n = len(vals)
     if n == 0:
         return b""
@@ -97,21 +106,38 @@ def _rle_encode(vals):
         run = boundaries[i + 1] - start
         v = int(vals[start])
         if run >= 4:
-            extend(b"!")
-            extend(_RUN_STR[run])
-            append(v)
+            if gri_limit:
+                # VT240 兼容：拆分为多段 ≤ 255
+                while run > 0:
+                    chunk = min(run, 255)
+                    extend(b"!")
+                    extend(_RUN_STR[chunk])
+                    append(v)
+                    run -= chunk
+            else:
+                extend(b"!")
+                extend(_RUN_STR[run])
+                append(v)
         else:
             extend(vals[start:start + run].tobytes())
     return bytes(out)
 
 
-def encode_sixel(pixels_np, palette_colors, w, h):
-    """将 numpy 像素数组编码为 Sixel 字符串。"""
+def encode_sixel(pixels_np, palette_colors, w, h, eight_bit=False, gri_limit=False):
+    """将 numpy 像素数组编码为 Sixel 字符串。
+
+    eight_bit=True  使用 8bit DCS (0x90 / 0x9C)
+    gri_limit=True  限制 GRI 参数 ≤ 255
+    """
     used_colors = np.unique(pixels_np)
     sixel_bands = (h + 5) // 6
 
     parts = bytearray()
-    parts.extend(b"\x1bP0;0;0q")
+    # DCS 头
+    if eight_bit:
+        parts.extend(b"\x900;0;0q")
+    else:
+        parts.extend(b"\x1bP0;0;0q")
 
     for idx in used_colors:
         r, g, b = int(palette_colors[idx, 0]), int(palette_colors[idx, 1]), int(palette_colors[idx, 2])
@@ -136,7 +162,7 @@ def encode_sixel(pixels_np, palette_colors, w, h):
         for ci in range(n_colors):
             cidx = int(band_colors[ci])
             parts.extend(_COLOR_STR[cidx])
-            parts.extend(_rle_encode(bits_all[ci] + 0x3F))
+            parts.extend(_rle_encode(bits_all[ci] + 0x3F, gri_limit=gri_limit))
             parts.append(0x24)
 
         if parts[-1] == 0x24:
@@ -144,11 +170,16 @@ def encode_sixel(pixels_np, palette_colors, w, h):
         else:
             parts.append(0x2D)
 
-    parts.extend(b"\x1b\\")
+    # DCS 尾
+    if eight_bit:
+        parts.extend(b"\x9c")
+    else:
+        parts.extend(b"\x1b\\")
+
     return bytes(parts), sixel_bands
 
 
-def get_gif_frames(path, dither=False):
+def get_gif_frames(path, max_px_width=640, max_colors=256, dither=False):
     """提取 GIF 所有帧，返回 (帧列表, 延迟列表) 或 (None, None)。"""
     img = Image.open(path)
     if not getattr(img, "is_animated", False) or img.n_frames <= 1:
@@ -172,7 +203,9 @@ def get_gif_frames(path, dither=False):
         frame = img.convert("RGBA")
         canvas.paste(frame, (0, 0), frame if frame.mode == "RGBA" else None)
 
-        pixels_np, palette_colors, w, h = _preprocess_frame(canvas.copy(), dither=dither)
+        pixels_np, palette_colors, w, h = _preprocess_frame(
+            canvas.copy(), max_px_width=max_px_width, max_colors=max_colors, dither=dither
+        )
         frame_arrays.append((pixels_np, palette_colors, w, h))
 
         if disposal == 2:
@@ -188,9 +221,26 @@ def get_gif_frames(path, dither=False):
     return frame_arrays, delays
 
 
-def play_gif(path):
+def _open_output(output_file):
+    """打开输出文件，返回 (file_handle, need_close)。stdout 时返回 (None, False)。"""
+    if output_file:
+        return open(output_file, "wb"), True
+    return None, False
+
+
+def _write(out, data):
+    """写入数据到文件或 stdout。"""
+    if out is not None:
+        out.write(data)
+    else:
+        sys.stdout.buffer.write(data)
+
+
+def play_gif(path, max_px_width=640, max_colors=256, dither=False,
+             output_file=None, loopmode="auto", eight_bit=False,
+             gri_limit=False, ignore_delay=False):
     """在终端中播放 GIF 动画（流式编码 + 帧间差分）。"""
-    frame_arrays, delays = get_gif_frames(path)
+    frame_arrays, delays = get_gif_frames(path, max_px_width=max_px_width, max_colors=max_colors, dither=dither)
     if frame_arrays is None:
         return False
 
@@ -201,85 +251,140 @@ def play_gif(path):
         file=sys.stderr,
     )
 
+    out, need_close = _open_output(output_file)
     prev_pixels = None
     num_bands = 0
 
     try:
         first = True
-        while True:
+        # loopmode: auto=终端循环/文件单次, force=强制循环, disable=只播一次
+        if loopmode == "auto" and output_file:
+            max_loops = 1  # 输出到文件时默认只播放一次
+        elif loopmode == "disable":
+            max_loops = 1
+        else:
+            max_loops = None
+        loop_count = 0
+
+        while max_loops is None or loop_count < max_loops:
             for i in range(n_frames):
                 pixels_np, palette_colors, w, h = frame_arrays[i]
 
                 if prev_pixels is not None and np.array_equal(pixels_np, prev_pixels):
-                    time.sleep(delays[i])
+                    if not ignore_delay:
+                        time.sleep(delays[i])
                     continue
 
                 t_frame = time.perf_counter()
-                sixel_data, num_bands = encode_sixel(pixels_np, palette_colors, w, h)
+                sixel_data, num_bands = encode_sixel(
+                    pixels_np, palette_colors, w, h,
+                    eight_bit=eight_bit, gri_limit=gri_limit
+                )
 
                 if not first:
-                    sys.stdout.write(f"\x1b[{num_bands}A")
-                sys.stdout.buffer.write(sixel_data)
-                sys.stdout.flush()
+                    _write(out, f"\x1b[{num_bands}A".encode())
+                _write(out, sixel_data)
+                if out is None:
+                    sys.stdout.flush()
 
                 del sixel_data
                 first = False
                 prev_pixels = pixels_np
-                elapsed = time.perf_counter() - t_frame
-                remaining = delays[i] - elapsed
-                if remaining > 0:
-                    time.sleep(remaining)
+
+                if not ignore_delay:
+                    elapsed = time.perf_counter() - t_frame
+                    remaining = delays[i] - elapsed
+                    if remaining > 0:
+                        time.sleep(remaining)
+
+            loop_count += 1
+
     except KeyboardInterrupt:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        _write(out, b"\n")
+        if out is None:
+            sys.stdout.flush()
+    finally:
+        if need_close:
+            out.close()
 
     return True
 
 
-def show_static(path):
-    """显示静态图片"""
+def show_static(path, max_px_width=640, max_colors=256, dither=False,
+                output_file=None, eight_bit=False, gri_limit=False):
+    """显示静态图片。"""
     img = Image.open(path)
-    pixels_np, palette_colors, w, h = _preprocess_frame(img)
-    sixel_data, _ = encode_sixel(pixels_np, palette_colors, w, h)
+    pixels_np, palette_colors, w, h = _preprocess_frame(
+        img, max_px_width=max_px_width, max_colors=max_colors, dither=dither
+    )
+    sixel_data, _ = encode_sixel(
+        pixels_np, palette_colors, w, h,
+        eight_bit=eight_bit, gri_limit=gri_limit
+    )
     print(
-        f"[{path.name}] {img.size[0]}x{img.size[1]} -> Sixel ({len(sixel_data)} bytes)",
+        f"[{path.name}] {img.size[0]}x{img.size[1]} -> Sixel ({len(sixel_data)} bytes, {max_colors} colors)",
         file=sys.stderr,
     )
-    sys.stdout.buffer.write(sixel_data)
-    sys.stdout.buffer.write(b"\n")
+
+    out, need_close = _open_output(output_file)
+    _write(out, sixel_data)
+    _write(out, b"\n")
+    if need_close:
+        out.close()
 
 
 def main():
-    no_anim = "--no-anim" in sys.argv
-    dither = "--dither" in sys.argv
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    default_cols = _get_terminal_columns()
 
-    if not args:
-        prog = Path(sys.argv[0]).name
-        print(f"Sixel 图片终端显示器\n")
-        print(f"用法: {prog} [选项] <图片路径>\n")
-        print(f"选项:")
-        print(f"  --no-anim    强制静态模式，GIF 只显示第一帧")
-        print(f"  --dither     启用 Bayer 有序抖动 (减少色带)\n")
-        print(f"支持格式: PNG, JPEG, GIF, BMP, WebP 等 (PIL 支持的所有格式)")
-        print(f"动画 GIF 会自动循环播放，按 Ctrl+C 停止")
-        print(f"终端需支持 Sixel 协议 (Windows Terminal, xterm, WezTerm 等)")
-        sys.exit(0)
-    else:
-        path = Path(args[0])
+    parser = argparse.ArgumentParser(
+        prog="pysixel",
+        description="Sixel 图片终端显示器",
+        epilog="支持格式: PNG, JPEG, GIF, BMP, WebP 等 (PIL 支持的所有格式)\n"
+               "动画 GIF 会自动循环播放，按 Ctrl+C 停止\n"
+               "终端需支持 Sixel 协议 (Windows Terminal, xterm, WezTerm 等)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("image", help="图片文件路径")
+    parser.add_argument("--no-anim", action="store_true", help="强制静态模式，GIF 只显示第一帧")
+    parser.add_argument("--dither", action="store_true", help="启用 Bayer 有序抖动 (减少色带)")
+    parser.add_argument("--colors", type=int, default=256, metavar="N",
+                        help="调色板颜色数 (2-256, 默认 256)")
+    parser.add_argument("--max-width", type=int, default=default_cols, metavar="COLS",
+                        help=f"最大终端列宽 (默认 {default_cols}, 即终端实际宽度)")
+    # 批次 1 新增参数
+    parser.add_argument("-o", "--output", metavar="FILE", help="输出到文件而非终端")
+    parser.add_argument("-l", "--loop", choices=["auto", "force", "disable"], default="auto",
+                        help="GIF 循环模式: auto(默认) / force / disable")
+    parser.add_argument("-7", dest="bit7", action="store_true", default=True, help="7bit DCS 模式 (默认)")
+    parser.add_argument("-8", dest="bit8", action="store_true", help="8bit DCS 模式")
+    parser.add_argument("-g", "--no-delay", action="store_true", help="忽略 GIF 帧延迟，尽快播放")
+    parser.add_argument("-R", "--gri-limit", action="store_true", help="限制 GRI 参数 ≤ 255 (VT240 兼容)")
 
+    args = parser.parse_args()
+
+    path = Path(args.image)
     if not path.exists():
-        print(f"文件不存在: {path}")
+        print(f"文件不存在: {path}", file=sys.stderr)
         sys.exit(1)
 
-    if not no_anim:
+    max_px_width = args.max_width * 8
+    max_colors = max(2, min(256, args.colors))
+    eight_bit = args.bit8
+    gri_limit = args.gri_limit
+
+    common = dict(
+        max_px_width=max_px_width, max_colors=max_colors, dither=args.dither,
+        output_file=args.output, eight_bit=eight_bit, gri_limit=gri_limit,
+    )
+
+    if not args.no_anim:
         try:
-            if play_gif(path):
+            if play_gif(path, loopmode=args.loop, ignore_delay=args.no_delay, **common):
                 return
         except Exception:
             pass
 
-    show_static(path)
+    show_static(path, **common)
 
 
 if __name__ == "__main__":
