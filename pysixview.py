@@ -1,8 +1,11 @@
-"""pysixview — 自适应 Sixel 文件查看器
+"""pysixview — 自适应 Sixel/图片查看器
 
-自动检测终端宽度，超宽图像缩放后输出，未超宽直接输出。
+自动检测终端宽度，自动识别输入格式:
+- Sixel 文件 (.six/.sixel): 未超宽直接输出，超宽解码缩放后重新编码
+- 普通图片 (PNG/JPEG/GIF 等): 计算宽度，未超宽不缩放，超宽缩放到最大宽度，
+  然后转换为 Sixel 输出到终端
 用法:
-    pysixview.py input.six
+    pysixview.py input.png
     pysixview.py -w 800 input.six
     pysixview.py -m 8 --save input.six   # 保存乘数设置
 """
@@ -69,9 +72,8 @@ def _decode_to_image(sixel_data):
     return img.convert('RGB')
 
 
-def _encode_image(img, max_px_width):
-    """将 PIL Image 编码为 Sixel 字节（缩放 + 量化 + 编码）。"""
-    img = _resize_for_terminal(img, max_px_width)
+def _quantize_and_encode(img):
+    """将（已缩放的）PIL Image 量化为 Sixel 字节，不做缩放。"""
     quantized = quantize(img, max_colors=256, dither="none", quality="auto")
     palette = quantized.getpalette()
     w, h = quantized.size
@@ -82,14 +84,42 @@ def _encode_image(img, max_px_width):
     return sixel_data
 
 
+def _encode_image(img, max_px_width):
+    """将 PIL Image 编码为 Sixel 字节（缩放 + 量化 + 编码）。"""
+    img = _resize_for_terminal(img, max_px_width)
+    return _quantize_and_encode(img)
+
+
+_SIXEL_SUFFIXES = frozenset({".six", ".sixel", ".sixel"})
+
+
+def _is_sixel_file(path, data):
+    """判断文件是否为 Sixel 格式：按扩展名或内容特征（DCS 头 / 光栅属性）。"""
+    if path.suffix.lower() in _SIXEL_SUFFIXES:
+        return True
+    return (data.startswith(b"\x1bP") or data.startswith(b"\x90")
+            or _parse_raster_width(data) is not None)
+
+
+def _open_image(path):
+    """打开图片文件并完整加载，失败时退出。"""
+    try:
+        img = Image.open(path)
+        img.load()
+        return img
+    except Exception as exc:
+        print(f"无法打开图片: {path} ({exc})", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     saved_multiplier = _load_multiplier()
 
     parser = argparse.ArgumentParser(
         prog="pysixview",
-        description="自适应 Sixel 文件查看器 — 超宽图像自动缩放",
+        description="自适应 Sixel/图片查看器 — 超宽图像自动缩放",
     )
-    parser.add_argument("input", help="Sixel 文件路径")
+    parser.add_argument("input", help="Sixel 文件或图片文件路径")
     parser.add_argument("-w", "--width", type=int, metavar="PX",
                         help="最大像素宽度（默认终端列数 × 乘数）")
     parser.add_argument("-m", "--multiplier", type=int, default=saved_multiplier, metavar="N",
@@ -115,8 +145,13 @@ def main():
     if not data:
         sys.exit(0)
 
+    is_sixel = _is_sixel_file(path, data)
+
     if args.info:
-        w, h = _parse_raster_size(data)
+        if is_sixel:
+            w, h = _parse_raster_size(data)
+        else:
+            w, h = _open_image(path).size
         if w is not None:
             print(f"{w}x{h}")
         else:
@@ -125,24 +160,36 @@ def main():
         return
 
     if args.no_resize:
-        sys.stdout.buffer.write(data)
+        if is_sixel:
+            sys.stdout.buffer.write(data)
+        else:
+            sys.stdout.buffer.write(_quantize_and_encode(_open_image(path)))
         sys.stdout.buffer.flush()
         return
 
     terminal_cols = _get_terminal_columns()
     max_px_width = args.width if args.width else terminal_cols * args.multiplier
 
-    # 快速解析图像宽度
-    img_width = _parse_raster_width(data)
+    if is_sixel:
+        # 快速解析图像宽度
+        img_width = _parse_raster_width(data)
 
-    if img_width is not None and img_width <= max_px_width:
-        # 未超宽（≤ 终端宽度 80%），直接输出
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        if img_width is not None and img_width <= max_px_width:
+            # 未超宽（≤ 终端宽度 80%），直接输出
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+        else:
+            # 超宽或无法解析宽度，解码→缩放→重编码
+            img = _decode_to_image(data)
+            sixel_data = _encode_image(img, max_px_width)
+            sys.stdout.buffer.write(sixel_data)
+            sys.stdout.buffer.flush()
     else:
-        # 超宽或无法解析宽度，解码→缩放→重编码
-        img = _decode_to_image(data)
-        sixel_data = _encode_image(img, max_px_width)
+        # 普通图片：计算宽度，未超宽不缩放，超宽缩放到最大宽度后编码输出
+        img = _open_image(path)
+        if img.size[0] > max_px_width:
+            img = _resize_for_terminal(img, max_px_width)
+        sixel_data = _quantize_and_encode(img)
         sys.stdout.buffer.write(sixel_data)
         sys.stdout.buffer.flush()
 
