@@ -35,7 +35,7 @@ Python Sixel 工具集 — Sixel 图形的编码、解码和自适应查看，�
 |------|------|---------------|
 | `pyimg2six.py` | 图片 → Sixel 编码器 & 终端查看器 | `img2sixel` |
 | `pysix2png.py` | Sixel → PNG 解码器 | `sixel2png` |
-| `pysixview.py` | 自适应 Sixel 查看器 — 超宽图像自动缩放至终端宽度 | -- |
+| `pysixview.py` | 自适应 Sixel/图片查看器 — 超宽图像自动缩放并支持 GIF/WebP 动图播放 | -- |
 
 ## 环境要求
 
@@ -187,7 +187,7 @@ python pysix2png.py -V
 
 ## pysixview — 自适应查看器
 
-自动检测终端宽度，超宽 Sixel 图像缩放后输出，未超宽直接输出。
+自动检测终端宽度，超宽 Sixel 图像缩放后输出，未超宽直接输出，并可自动播放 GIF/WebP 等动图（Ctrl+C 停止）。
 
 ```bash
 # 查看 .six 文件（超宽时自动缩放）

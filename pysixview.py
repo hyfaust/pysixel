@@ -4,6 +4,7 @@
 - Sixel 文件 (.six/.sixel): 未超宽直接输出，超宽解码缩放后重新编码
 - 普通图片 (PNG/JPEG/GIF 等): 计算宽度，未超宽不缩放，超宽缩放到最大宽度，
   然后转换为 Sixel 输出到终端
+- 动图 (GIF/WebP 等): 自动进入动画模式循环播放（Ctrl+C 停止）
 用法:
     pysixview.py input.png
     pysixview.py -w 800 input.six
@@ -20,7 +21,13 @@ import numpy as np
 from PIL import Image
 
 from pysix2png import _sixel_decode_raw, SIXEL_PALETTE_MAX
-from pyimg2six import encode_sixel, _resize_for_terminal, quantize, _get_terminal_columns
+from pyimg2six import (
+    encode_sixel,
+    _resize_for_terminal,
+    quantize,
+    _get_terminal_columns,
+    play_gif,
+)
 
 _CONFIG_PATH = Path.home() / ".sixview.conf"
 _DEFAULT_MULTIPLIER = 8
@@ -112,6 +119,14 @@ def _open_image(path):
         sys.exit(1)
 
 
+def _try_play_animation(path, max_px_width, no_resize=False):
+    """尝试播放动图，若成功进入动画播放则返回 True。"""
+    try:
+        return play_gif(path, max_px_width=max_px_width, no_resize=no_resize, loopmode="force")
+    except (OSError, ValueError):
+        return False
+
+
 def main():
     saved_multiplier = _load_multiplier()
 
@@ -159,6 +174,12 @@ def main():
             sys.exit(1)
         return
 
+    terminal_cols = _get_terminal_columns()
+    max_px_width = args.width if args.width else terminal_cols * args.multiplier
+
+    if not is_sixel and _try_play_animation(path, max_px_width=max_px_width, no_resize=args.no_resize):
+        return
+
     if args.no_resize:
         if is_sixel:
             sys.stdout.buffer.write(data)
@@ -166,9 +187,6 @@ def main():
             sys.stdout.buffer.write(_quantize_and_encode(_open_image(path)))
         sys.stdout.buffer.flush()
         return
-
-    terminal_cols = _get_terminal_columns()
-    max_px_width = args.width if args.width else terminal_cols * args.multiplier
 
     if is_sixel:
         # 快速解析图像宽度

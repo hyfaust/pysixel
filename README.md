@@ -35,7 +35,7 @@ Python Sixel toolkit — encoding, decoding, and viewing tools for Sixel graphic
 |------|-------------|---------------------|
 | `pyimg2six.py` | Image → Sixel encoder & terminal viewer | `img2sixel` |
 | `pysix2png.py` | Sixel → PNG decoder | `sixel2png` |
-| `pysixview.py` | Adaptive Sixel viewer — auto-scales wide images to terminal width | -- |
+| `pysixview.py` | Adaptive Sixel/image viewer — auto-scales wide images and supports animated GIF/WebP playback | -- |
 
 ## Prerequisites
 
@@ -187,7 +187,7 @@ python pysix2png.py -V
 
 ## pysixview — Adaptive Viewer
 
-Auto-detects terminal width, scales wide Sixel images to fit, passes through narrow ones unchanged.
+Auto-detects terminal width, scales wide Sixel images to fit, passes through narrow ones unchanged, and auto-plays animated GIF/WebP-like formats (Ctrl+C to stop).
 
 ```bash
 # View a .six file (auto-scales if wider than terminal)
